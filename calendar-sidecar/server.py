@@ -1,0 +1,414 @@
+"""
+server.py
+=========
+Runs two servers in the same process:
+
+  Port 8080 – minimal HTTP server (BaseHTTPRequestHandler)
+               Serves /week.png, /next.png, /health, /
+
+  Port 5000 – Flask admin GUI
+               Manages calendars, settings, and webhook targets.
+               Accessible at http://localhost:5000
+
+After each successful refresh, POSTs to every enabled webhook with:
+  { "merge_variables": { "image_url", "next_image_url", "week", "refreshed_at" } }
+"""
+
+from __future__ import annotations
+
+import io
+import json
+import logging
+import threading
+import time
+from datetime import date, datetime, timedelta, timezone
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from zoneinfo import ZoneInfo
+
+import requests as _requests
+
+import config
+from caldav_client import CalEvent, fetch_week
+from flask import Flask, redirect, render_template, request, url_for
+from renderer import render_week
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    datefmt="%H:%M:%S",
+)
+log = logging.getLogger(__name__)
+
+
+# ── Shared state ──────────────────────────────────────────────────────────────
+
+_lock            = threading.Lock()
+_png_current: bytes | None = None
+_png_next:    bytes | None = None
+_last_fetch:  float        = 0
+_last_error:  str | None   = None
+
+
+# ── Fetch + render ────────────────────────────────────────────────────────────
+
+def _monday_of(d: date) -> date:
+    return d - timedelta(days=d.weekday())
+
+
+def _time_start_for(week_start: date) -> int:
+    """Compute the first visible hour for a given week based on config."""
+    cfg = config.get()
+    window = int(cfg["time_window_hours"])
+    mode   = cfg["time_start_mode"]
+    fixed  = int(cfg["time_start_hour"])
+
+    if mode == "auto" and week_start == _monday_of(date.today()):
+        local_tz = ZoneInfo(config.timezone())
+        now      = datetime.now(tz=local_tz)
+        frac     = now.hour + now.minute / 60
+        # Place current time ~1/3 from top of the window
+        raw = frac - window / 3
+        return max(0, min(int(raw), 24 - window))
+
+    return fixed
+
+
+def _render_to_bytes(week_start: date, calendars: list[dict]) -> bytes:
+    cfg               = config.get()
+    local_tz          = ZoneInfo(cfg["timezone"])
+    width, height     = int(cfg["render_width"]), int(cfg["render_height"])
+    time_window       = int(cfg["time_window_hours"])
+    time_start        = _time_start_for(week_start)
+    events_by_cal: dict[str, tuple[str, list[CalEvent]]] = {}
+
+    for cal in calendars:
+        name  = cal["name"]
+        color = cal["color"]
+        try:
+            evs = fetch_week(
+                url        = cal["url"],
+                user       = cal["user"],
+                password   = cal["password"],
+                cal_name   = name,
+                color      = color,
+                week_start = week_start,
+                local_tz   = local_tz,
+            )
+            events_by_cal[name] = (color, evs)
+            log.info("  %-20s → %d events", name, len(evs))
+        except Exception as e:
+            log.warning("  %-20s → FAILED: %s", name, e)
+            events_by_cal[name] = (color, [])
+
+    img = render_week(
+        events_by_cal,
+        week_start,
+        width=width,
+        height=height,
+        time_window_hours=time_window,
+        time_start_hour=time_start,
+        today_highlight=bool(cfg.get("today_highlight", False)),
+    )
+    buf = io.BytesIO()
+    img.save(buf, format="PNG", optimize=True)
+    return buf.getvalue()
+
+
+def refresh() -> None:
+    global _png_current, _png_next, _last_fetch, _last_error
+
+    calendars  = config.calendars()
+    today      = date.today()
+    this_week  = _monday_of(today)
+    next_week  = this_week + timedelta(weeks=1)
+
+    log.info("Refreshing calendars (week %s)…", this_week.isoformat())
+
+    try:
+        current = _render_to_bytes(this_week, calendars)
+        nxt     = _render_to_bytes(next_week, calendars)
+        with _lock:
+            _png_current = current
+            _png_next    = nxt
+            _last_fetch  = time.time()
+            _last_error  = None
+        log.info("Refresh complete.")
+        _fire_webhooks()
+    except Exception as e:
+        log.error("Refresh failed: %s", e)
+        with _lock:
+            _last_error = str(e)
+
+
+def _fire_webhooks() -> None:
+    """POST merge_variables to every enabled webhook after a successful refresh."""
+    hooks = config.webhooks()
+    if not hooks:
+        return
+
+    today      = date.today()
+    week_start = _monday_of(today)
+    week_end   = week_start + timedelta(days=6)
+    week_label = (
+        f"{week_start.strftime('%b %-d')} \u2013 {week_end.strftime('%b %-d, %Y')}"
+    )
+
+    for hook in hooks:
+        if not hook.get("enabled", True):
+            continue
+        base = hook.get("image_base_url", "http://calendar:8080").rstrip("/")
+        payload = {
+            "merge_variables": {
+                "image_url":      f"{base}/week.png",
+                "next_image_url": f"{base}/next.png",
+                "week":           week_label,
+                "refreshed_at":   datetime.now().isoformat(timespec="seconds"),
+            }
+        }
+        try:
+            r = _requests.post(hook["url"], json=payload, timeout=10)
+            r.raise_for_status()
+            log.info("Webhook [%s] → HTTP %d", hook["name"], r.status_code)
+        except Exception as e:
+            log.warning("Webhook [%s] failed: %s", hook["name"], e)
+
+
+def _scheduler() -> None:
+    while True:
+        refresh()
+        time.sleep(config.refresh_seconds())
+
+
+# ── Port-8080 HTTP handler ────────────────────────────────────────────────────
+
+class Handler(BaseHTTPRequestHandler):
+
+    def log_message(self, fmt, *args):  # silence default access log spam
+        pass
+
+    def do_GET(self):
+        path = self.path.split("?")[0]
+
+        if path == "/week.png":
+            self._serve_png(_png_current)
+        elif path == "/next.png":
+            self._serve_png(_png_next)
+        elif path == "/health":
+            self._serve_health()
+        elif path in ("/", "/debug"):
+            self._serve_debug()
+        else:
+            self.send_error(404, "Not found")
+
+    def _serve_png(self, data: bytes | None):
+        if data is None:
+            self.send_error(503, "Not ready yet – refresh in progress")
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", "image/png")
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "no-cache")
+        self.end_headers()
+        self.wfile.write(data)
+
+    def _serve_health(self):
+        refresh_secs = config.refresh_seconds()
+        with _lock:
+            body = json.dumps({
+                "status":      "ok" if _last_error is None else "degraded",
+                "last_fetch":  _last_fetch,
+                "next_fetch":  _last_fetch + refresh_secs,
+                "error":       _last_error,
+                "png_ready":   _png_current is not None,
+            }).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _serve_debug(self):
+        today     = date.today()
+        this_week = _monday_of(today)
+        refresh_secs = config.refresh_seconds()
+        html = f"""<!doctype html><html><head><meta charset=utf-8>
+<title>TRMNL Week Calendar</title>
+<style>body{{font-family:sans-serif;padding:20px;background:#f5f5f5}}
+img{{border:2px solid #333;border-radius:4px;max-width:100%}}
+.meta{{font-size:13px;color:#555;margin:8px 0}}</style></head>
+<body>
+<h2>📅 TRMNL Week Calendar</h2>
+<p class=meta>Week: <strong>{this_week}</strong> · Refresh every {refresh_secs}s
+· <a href="http://localhost:5000">Admin GUI</a></p>
+<h3>Current week</h3>
+<img src="/week.png?t={int(time.time())}"><br>
+<h3>Next week</h3>
+<img src="/next.png?t={int(time.time())}">
+<p class=meta><a href="/health">health check</a></p>
+</body></html>"""
+        body = html.encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+
+# ── Flask admin app (port 5000) ───────────────────────────────────────────────
+
+admin = Flask(__name__, template_folder="templates")
+
+
+@admin.get("/")
+def admin_index():
+    cfg    = config.get()
+    saved  = request.args.get("saved") == "1"
+    error  = request.args.get("error", "")
+    host   = request.host.split(":")[0]
+    return render_template("admin.html",
+                           cfg=cfg, saved=saved, error=error,
+                           host=host, ts=int(time.time()))
+
+
+@admin.post("/settings")
+def admin_settings():
+    try:
+        cfg = config.get()
+        cfg["refresh_seconds"]  = int(request.form["refresh_seconds"])
+        cfg["timezone"]         = request.form["timezone"].strip()
+        cfg["render_width"]     = int(request.form["render_width"])
+        cfg["render_height"]    = int(request.form["render_height"])
+        cfg["time_window_hours"] = int(request.form["time_window_hours"])
+        cfg["time_start_mode"]  = request.form["time_start_mode"]
+        cfg["time_start_hour"]  = int(request.form["time_start_hour"])
+        cfg["today_highlight"]  = "today_highlight" in request.form
+        config.update(cfg)
+    except Exception as e:
+        return redirect(url_for("admin_index", error=str(e)))
+    return redirect(url_for("admin_index", saved=1))
+
+
+@admin.post("/calendar/add")
+def calendar_add():
+    try:
+        cfg = config.get()
+        cfg["calendars"].append({
+            "name":     request.form["name"].strip(),
+            "url":      request.form["url"].strip(),
+            "user":     request.form["user"].strip(),
+            "password": request.form["password"],
+            "color":    request.form["color"],
+        })
+        config.update(cfg)
+    except Exception as e:
+        return redirect(url_for("admin_index", error=str(e)))
+    return redirect(url_for("admin_index", saved=1))
+
+
+@admin.post("/calendar/<int:idx>/edit")
+def calendar_edit(idx: int):
+    try:
+        cfg = config.get()
+        cfg["calendars"][idx] = {
+            "name":     request.form["name"].strip(),
+            "url":      request.form["url"].strip(),
+            "user":     request.form["user"].strip(),
+            "password": request.form["password"],
+            "color":    request.form["color"],
+        }
+        config.update(cfg)
+    except Exception as e:
+        return redirect(url_for("admin_index", error=str(e)))
+    return redirect(url_for("admin_index", saved=1))
+
+
+@admin.post("/calendar/<int:idx>/delete")
+def calendar_delete(idx: int):
+    try:
+        cfg = config.get()
+        cfg["calendars"].pop(idx)
+        config.update(cfg)
+    except Exception as e:
+        return redirect(url_for("admin_index", error=str(e)))
+    return redirect(url_for("admin_index", saved=1))
+
+
+@admin.post("/webhook/add")
+def webhook_add():
+    try:
+        cfg = config.get()
+        cfg["webhooks"].append({
+            "name":           request.form["name"].strip(),
+            "url":            request.form["url"].strip(),
+            "image_base_url": request.form["image_base_url"].strip(),
+            "enabled":        "enabled" in request.form,
+        })
+        config.update(cfg)
+    except Exception as e:
+        return redirect(url_for("admin_index", error=str(e)))
+    return redirect(url_for("admin_index", saved=1))
+
+
+@admin.post("/webhook/<int:idx>/edit")
+def webhook_edit(idx: int):
+    try:
+        cfg = config.get()
+        cfg["webhooks"][idx] = {
+            "name":           request.form["name"].strip(),
+            "url":            request.form["url"].strip(),
+            "image_base_url": request.form["image_base_url"].strip(),
+            "enabled":        "enabled" in request.form,
+        }
+        config.update(cfg)
+    except Exception as e:
+        return redirect(url_for("admin_index", error=str(e)))
+    return redirect(url_for("admin_index", saved=1))
+
+
+@admin.post("/webhook/<int:idx>/delete")
+def webhook_delete(idx: int):
+    try:
+        cfg = config.get()
+        cfg["webhooks"].pop(idx)
+        config.update(cfg)
+    except Exception as e:
+        return redirect(url_for("admin_index", error=str(e)))
+    return redirect(url_for("admin_index", saved=1))
+
+
+@admin.post("/refresh")
+def admin_refresh():
+    threading.Thread(target=refresh, daemon=True).start()
+    return redirect(url_for("admin_index"))
+
+
+# ── Entry point ───────────────────────────────────────────────────────────────
+
+def main():
+    config.load()
+
+    cals = config.calendars()
+    if not cals:
+        log.warning("No calendars configured. Open http://localhost:5000 to add calendars.")
+    else:
+        log.info("Loaded %d calendar(s):", len(cals))
+        for c in cals:
+            log.info("  • %-20s %s", c["name"], c["url"])
+
+    # Background scheduler
+    threading.Thread(target=_scheduler, daemon=True).start()
+
+    # Flask admin on port 5000
+    threading.Thread(
+        target=lambda: admin.run(host="0.0.0.0", port=5000, use_reloader=False),
+        daemon=True,
+    ).start()
+
+    port = 8080
+    log.info("PNG server   : http://0.0.0.0:%d/week.png", port)
+    log.info("Admin GUI    : http://0.0.0.0:5000/")
+
+    HTTPServer(("0.0.0.0", port), Handler).serve_forever()
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,300 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>TRMNL Calendar Admin</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; }
+    body   { font-family: system-ui, sans-serif; background: #f0f0f0; color: #222; margin: 0; padding: 20px; }
+    h1     { font-size: 1.3rem; margin: 0 0 18px; }
+    h2     { font-size: 1rem; margin: 24px 0 8px; border-bottom: 1px solid #ccc; padding-bottom: 4px; }
+    section { background: #fff; border: 1px solid #ddd; border-radius: 6px; padding: 16px; margin-bottom: 20px; }
+    label  { display: block; font-size: 0.85rem; font-weight: 600; margin-bottom: 2px; margin-top: 10px; }
+    label:first-child { margin-top: 0; }
+    input[type=text], input[type=url], input[type=number], input[type=password] {
+      width: 100%; padding: 6px 8px; border: 1px solid #bbb; border-radius: 4px; font-size: 0.9rem;
+    }
+    input[type=color] { width: 48px; height: 32px; padding: 2px; border: 1px solid #bbb; border-radius: 4px; cursor: pointer; }
+    .row   { display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-end; }
+    .row > * { flex: 1; min-width: 140px; }
+    .row .color-field { flex: 0 0 60px; min-width: unset; }
+    button { padding: 7px 16px; border: none; border-radius: 4px; cursor: pointer; font-size: 0.9rem; }
+    .btn-primary  { background: #2563eb; color: #fff; }
+    .btn-primary:hover  { background: #1d4ed8; }
+    .btn-danger   { background: #dc2626; color: #fff; }
+    .btn-danger:hover   { background: #b91c1c; }
+    .btn-secondary { background: #e5e7eb; color: #222; }
+    .btn-secondary:hover { background: #d1d5db; }
+    .cal-card { border: 1px solid #ddd; border-radius: 5px; padding: 12px; margin-bottom: 12px; background: #fafafa; }
+    .cal-card h3 { margin: 0 0 10px; font-size: 0.95rem; display: flex; align-items: center; gap: 8px; }
+    .swatch { display: inline-block; width: 14px; height: 14px; border-radius: 3px; border: 1px solid #999; vertical-align: middle; }
+    .cal-actions { display: flex; gap: 8px; margin-top: 10px; }
+    .flash-ok  { background: #dcfce7; border: 1px solid #86efac; color: #166534; padding: 10px 14px; border-radius: 5px; margin-bottom: 16px; }
+    .flash-err { background: #fee2e2; border: 1px solid #fca5a5; color: #991b1b; padding: 10px 14px; border-radius: 5px; margin-bottom: 16px; }
+    .preview img { max-width: 100%; border: 1px solid #ccc; border-radius: 4px; }
+    details summary { cursor: pointer; font-weight: 600; }
+    details[open] summary { margin-bottom: 10px; }
+  </style>
+</head>
+<body>
+
+<h1>TRMNL Calendar Admin</h1>
+
+{% if saved %}
+<div class="flash-ok">Changes saved successfully.</div>
+{% endif %}
+{% if error %}
+<div class="flash-err">Error: {{ error }}</div>
+{% endif %}
+
+<!-- ── Live preview ─────────────────────────────────────────────────── -->
+<section>
+  <h2>Preview</h2>
+  <div class="preview">
+    <p style="font-size:0.82rem;color:#666;margin:0 0 8px">
+      Current week &mdash; served by the PNG server on port 8080.
+      <a href="/refresh" style="font-size:inherit" onclick="this.closest('form') || (event.preventDefault(), fetch('/refresh',{method:'POST'}).then(()=>location.reload()))">Refresh now</a>
+    </p>
+    <img src="http://{{ host }}:8080/week.png?t={{ ts }}" alt="Current week">
+  </div>
+  <form method="post" action="/refresh" style="margin-top:10px">
+    <button type="submit" class="btn-secondary">Trigger refresh</button>
+  </form>
+</section>
+
+<!-- ── Settings ────────────────────────────────────────────────────── -->
+<section>
+  <h2>Settings</h2>
+  <form method="post" action="/settings">
+    <div class="row">
+      <div>
+        <label for="refresh_seconds">Refresh interval (seconds)</label>
+        <input type="number" id="refresh_seconds" name="refresh_seconds"
+               value="{{ cfg.refresh_seconds }}" min="10" required>
+      </div>
+      <div>
+        <label for="timezone">Timezone</label>
+        <input type="text" id="timezone" name="timezone"
+               value="{{ cfg.timezone }}" placeholder="Europe/Berlin" required>
+      </div>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <div>
+        <label for="render_width">Render width (px)</label>
+        <input type="number" id="render_width" name="render_width"
+               value="{{ cfg.render_width }}" min="100" required>
+      </div>
+      <div>
+        <label for="render_height">Render height (px)</label>
+        <input type="number" id="render_height" name="render_height"
+               value="{{ cfg.render_height }}" min="100" required>
+      </div>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <div>
+        <label for="time_window_hours">Time window (hours shown)</label>
+        <input type="number" id="time_window_hours" name="time_window_hours"
+               value="{{ cfg.time_window_hours }}" min="1" max="24" required>
+      </div>
+      <div>
+        <label for="time_start_mode">Window start</label>
+        <select id="time_start_mode" name="time_start_mode"
+                style="width:100%;padding:6px 8px;border:1px solid #bbb;border-radius:4px;font-size:0.9rem"
+                onchange="document.getElementById('fixed_hour_row').style.display=this.value==='fixed'?'flex':' none'">
+          <option value="auto"  {% if cfg.time_start_mode == 'auto'  %}selected{% endif %}>Auto (follow current time)</option>
+          <option value="fixed" {% if cfg.time_start_mode == 'fixed' %}selected{% endif %}>Fixed hour</option>
+        </select>
+      </div>
+      <div id="fixed_hour_row" style="{% if cfg.time_start_mode != 'fixed' %}display:none{% endif %}">
+        <label for="time_start_hour">Fixed start hour (0–23)</label>
+        <input type="number" id="time_start_hour" name="time_start_hour"
+               value="{{ cfg.time_start_hour }}" min="0" max="23">
+      </div>
+    </div>
+    <div style="margin-top:12px">
+      <label style="font-weight:600;font-size:0.85rem">
+        <input type="checkbox" name="today_highlight" value="1"
+               {% if cfg.today_highlight %}checked{% endif %}>
+        Highlight today column
+      </label>
+    </div>
+    <div style="margin-top:12px">
+      <button type="submit" class="btn-primary">Save settings</button>
+    </div>
+  </form>
+</section>
+
+<!-- ── Calendars ────────────────────────────────────────────────────── -->
+<section>
+  <h2>Calendars</h2>
+
+  {% for cal in cfg.calendars %}
+  <div class="cal-card">
+    <h3>
+      <span class="swatch" style="background:{{ cal.color }}"></span>
+      {{ cal.name }}
+    </h3>
+    <details>
+      <summary>Edit</summary>
+      <form method="post" action="/calendar/{{ loop.index0 }}/edit">
+        <div class="row">
+          <div>
+            <label>Name</label>
+            <input type="text" name="name" value="{{ cal.name }}" required>
+          </div>
+          <div class="color-field">
+            <label>Color</label>
+            <input type="color" name="color" value="{{ cal.color }}">
+          </div>
+        </div>
+        <label>CalDAV URL</label>
+        <input type="url" name="url" value="{{ cal.url }}" required>
+        <div class="row" style="margin-top:0">
+          <div>
+            <label>Username</label>
+            <input type="text" name="user" value="{{ cal.user }}" required>
+          </div>
+          <div>
+            <label>Password / App password</label>
+            <input type="password" name="password" value="{{ cal.password }}" required>
+          </div>
+        </div>
+        <div class="cal-actions">
+          <button type="submit" class="btn-primary">Save</button>
+        </div>
+      </form>
+    </details>
+    <div class="cal-actions">
+      <form method="post" action="/calendar/{{ loop.index0 }}/delete"
+            onsubmit="return confirm('Delete calendar {{ cal.name }}?')">
+        <button type="submit" class="btn-danger">Delete</button>
+      </form>
+    </div>
+  </div>
+  {% else %}
+  <p style="color:#666;font-size:0.9rem">No calendars configured yet. Add one below.</p>
+  {% endfor %}
+
+  <!-- Add calendar -->
+  <details style="margin-top:16px">
+    <summary>Add calendar</summary>
+    <form method="post" action="/calendar/add" style="margin-top:10px">
+      <div class="row">
+        <div>
+          <label>Name</label>
+          <input type="text" name="name" placeholder="Work" required>
+        </div>
+        <div class="color-field">
+          <label>Color</label>
+          <input type="color" name="color" value="#4A90D9">
+        </div>
+      </div>
+      <label>CalDAV URL</label>
+      <input type="url" name="url"
+             placeholder="https://cloud.example.com/remote.php/dav/calendars/user/calendar/" required>
+      <div class="row" style="margin-top:0">
+        <div>
+          <label>Username</label>
+          <input type="text" name="user" required>
+        </div>
+        <div>
+          <label>Password / App password</label>
+          <input type="password" name="password" required>
+        </div>
+      </div>
+      <div style="margin-top:12px">
+        <button type="submit" class="btn-primary">Add calendar</button>
+      </div>
+    </form>
+  </details>
+</section>
+
+<!-- ── Webhooks ─────────────────────────────────────────────────── -->
+<section>
+  <h2>Webhooks</h2>
+  <p style="font-size:0.82rem;color:#666;margin:0 0 12px">
+    After each successful refresh, a POST is sent to every enabled webhook with:
+    <code>merge_variables.image_url</code>, <code>next_image_url</code>,
+    <code>week</code>, <code>refreshed_at</code>.
+  </p>
+
+  {% for hook in cfg.webhooks %}
+  <div class="cal-card">
+    <h3>
+      {% if hook.enabled %}<span style="color:#16a34a">&#x25CF;</span>
+      {% else %}<span style="color:#9ca3af">&#x25CF;</span>{% endif %}
+      {{ hook.name }}
+    </h3>
+    <p style="font-size:0.82rem;color:#555;margin:0 0 6px;word-break:break-all">{{ hook.url }}</p>
+    <details>
+      <summary>Edit</summary>
+      <form method="post" action="/webhook/{{ loop.index0 }}/edit">
+        <div class="row">
+          <div>
+            <label>Name</label>
+            <input type="text" name="name" value="{{ hook.name }}" required>
+          </div>
+          <div style="flex:0 0 auto;display:flex;align-items:flex-end;gap:6px">
+            <label style="margin:0">
+              <input type="checkbox" name="enabled" value="1"
+                     {% if hook.enabled %}checked{% endif %}> Enabled
+            </label>
+          </div>
+        </div>
+        <label>Webhook URL</label>
+        <input type="url" name="url" value="{{ hook.url }}" required>
+        <label>Image base URL
+          <span style="font-weight:400;color:#666">(how BYOS reaches this container)</span>
+        </label>
+        <input type="text" name="image_base_url"
+               value="{{ hook.image_base_url or 'http://calendar:8080' }}"
+               placeholder="http://calendar:8080">
+        <div class="cal-actions">
+          <button type="submit" class="btn-primary">Save</button>
+        </div>
+      </form>
+    </details>
+    <div class="cal-actions">
+      <form method="post" action="/webhook/{{ loop.index0 }}/delete"
+            onsubmit="return confirm('Delete webhook {{ hook.name }}?')">
+        <button type="submit" class="btn-danger">Delete</button>
+      </form>
+    </div>
+  </div>
+  {% else %}
+  <p style="color:#666;font-size:0.9rem">No webhooks configured yet. Add one below.</p>
+  {% endfor %}
+
+  <!-- Add webhook -->
+  <details style="margin-top:16px">
+    <summary>Add webhook</summary>
+    <form method="post" action="/webhook/add" style="margin-top:10px">
+      <div class="row">
+        <div>
+          <label>Name</label>
+          <input type="text" name="name" placeholder="BYOS" required>
+        </div>
+        <div style="flex:0 0 auto;display:flex;align-items:flex-end">
+          <label style="margin:0">
+            <input type="checkbox" name="enabled" value="1" checked> Enabled
+          </label>
+        </div>
+      </div>
+      <label>Webhook URL</label>
+      <input type="url" name="url"
+             placeholder="http://byos:8080/webhooks/{token}" required>
+      <label>Image base URL
+        <span style="font-weight:400;color:#666">(how BYOS reaches this container)</span>
+      </label>
+      <input type="text" name="image_base_url"
+             value="http://calendar:8080" placeholder="http://calendar:8080">
+      <div style="margin-top:12px">
+        <button type="submit" class="btn-primary">Add webhook</button>
+      </div>
+    </form>
+  </details>
+</section>
+
+</body>
+</html>
