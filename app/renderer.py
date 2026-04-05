@@ -197,7 +197,11 @@ def _draw_legend(
             fill = fill_map.get(color, BLACK)
             draw.rectangle([lx, HEADER_H + 3, lx + 10, HEADER_H + LEGEND_H - 4],
                            fill=fill, outline=BLACK)
-            lx += 14 + int(draw.textlength(cal_name, font=FONT_LEGEND)) + 14
+            lx += 14
+            tw = int(draw.textlength(cal_name, font=FONT_LEGEND))
+            draw.rectangle([lx - 1, HEADER_H + 2, lx + tw + 2, HEADER_H + LEGEND_H - 3],
+                           fill=WHITE)
+            lx += tw + 14
     else:
         for cal_name, (color, _) in events_by_cal.items():
             lx += 14
@@ -441,6 +445,13 @@ def _draw_timed_block(draw: ImageDraw.ImageDraw, ev: CalEvent,
     ty     = y0 + 1
     lh_sm  = 12         # FONT_TIME  (size 10) line height
     lh_ev  = 13         # FONT_EVENT (size 10 bold) line height
+
+    short = (ev.end - ev.start).total_seconds() <= 1800  # ≤ 30 min: name only
+
+    if short:
+        draw.text((tx, ty), _truncate(ev.summary, tw, FONT_EVENT, draw),
+                  font=FONT_EVENT, fill=BLACK)
+        return
 
     # Line 1: time
     draw.text((tx, ty), ev.start.strftime("%H:%M"), font=FONT_TIME, fill=BLACK)
