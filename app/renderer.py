@@ -22,6 +22,8 @@ import dataclasses
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
+import pyphen
+
 from PIL import Image, ImageDraw, ImageFont
 
 from caldav_client import CalEvent
@@ -408,22 +410,68 @@ def render_3day(
 
 # ── Event block renderer ──────────────────────────────────────────────────────
 
+_hyphenation_lang: str          = "de_DE"
+_hyphenator:       pyphen.Pyphen | None = None
+
+
+def set_hyphenation_lang(lang: str) -> None:
+    global _hyphenation_lang, _hyphenator
+    _hyphenation_lang = lang
+    _hyphenator = None   # force recreation on next use
+
+
+def _get_hyphenator() -> pyphen.Pyphen:
+    global _hyphenator
+    if _hyphenator is None:
+        _hyphenator = pyphen.Pyphen(lang=_hyphenation_lang)
+    return _hyphenator
+
+
+def _break_word(word: str, max_px: int, font: ImageFont.FreeTypeFont,
+                draw: ImageDraw.ImageDraw) -> tuple[str, str]:
+    """
+    Break a word that is too long to fit in max_px.
+    Returns (head_with_hyphen, tail). Falls back to a character-level split
+    if no hyphenation point is found.
+    """
+    hyph  = _get_hyphenator()
+    pairs = hyph.iterate(word)          # yields (left, right) pairs, longest first
+    for left, right in pairs:
+        candidate = left + "-"
+        if draw.textlength(candidate, font=font) <= max_px:
+            return candidate, right
+    # No hyphenation point fits — split character by character
+    for i in range(len(word) - 1, 0, -1):
+        candidate = word[:i] + "-"
+        if draw.textlength(candidate, font=font) <= max_px:
+            return candidate, word[i:]
+    return word, ""                     # word is too long even for one char
+
+
 def _wrap_text(text: str, max_px: int, font: ImageFont.FreeTypeFont,
                draw: ImageDraw.ImageDraw) -> list[str]:
-    """Split text into lines that each fit within max_px."""
+    """Split text into lines that each fit within max_px, with hyphenation."""
     words = text.split()
     if not words:
         return []
     lines: list[str] = []
-    current = words[0]
-    for word in words[1:]:
-        candidate = current + " " + word
+    current = ""
+    for word in words:
+        candidate = (current + " " + word).lstrip() if current else word
         if draw.textlength(candidate, font=font) <= max_px:
             current = candidate
         else:
-            lines.append(current)
+            # Word doesn't fit on the current line — try hyphenating
+            if current:
+                lines.append(current)
+                current = ""
+            # The word may still be too long even on its own line
+            while draw.textlength(word, font=font) > max_px:
+                head, word = _break_word(word, max_px, font, draw)
+                lines.append(head)
             current = word
-    lines.append(current)
+    if current:
+        lines.append(current)
     return lines
 
 

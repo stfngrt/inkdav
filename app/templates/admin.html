@@ -113,6 +113,21 @@
     </div>
     <div class="row" style="margin-top:10px">
       <div>
+        <label for="hyphenation_lang">Hyphenation language</label>
+        <select id="hyphenation_lang" name="hyphenation_lang"
+                style="width:100%;padding:6px 8px;border:1px solid #bbb;border-radius:4px;font-size:0.9rem">
+          {% set lang = cfg.get('hyphenation_lang', 'de_DE') %}
+          <option value="de_DE" {% if lang == 'de_DE' %}selected{% endif %}>German (de_DE)</option>
+          <option value="en_US" {% if lang == 'en_US' %}selected{% endif %}>English (en_US)</option>
+          <option value="fr_FR" {% if lang == 'fr_FR' %}selected{% endif %}>French (fr_FR)</option>
+          <option value="nl_NL" {% if lang == 'nl_NL' %}selected{% endif %}>Dutch (nl_NL)</option>
+          <option value="es_ES" {% if lang == 'es_ES' %}selected{% endif %}>Spanish (es_ES)</option>
+          <option value="it_IT" {% if lang == 'it_IT' %}selected{% endif %}>Italian (it_IT)</option>
+        </select>
+      </div>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <div>
         <label for="time_window_hours">Time window (hours shown)</label>
         <input type="number" id="time_window_hours" name="time_window_hours"
                value="{{ cfg.time_window_hours }}" min="1" max="24" required>

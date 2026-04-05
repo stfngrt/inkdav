@@ -8,6 +8,7 @@ dependencies = [
     "Pillow==10.4.0",
     "Flask==3.0.3",
     "requests==2.32.3",
+    "pyphen>=0.17.2",
 ]
 
 [dependency-groups]

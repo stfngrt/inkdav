@@ -36,7 +36,7 @@ from flask import Flask, redirect, render_template, request, url_for
 from jinja2 import Environment, FileSystemLoader
 
 _jinja = Environment(loader=FileSystemLoader(Path(__file__).parent / "templates"), autoescape=True)
-from renderer import render_days
+from renderer import render_days, set_hyphenation_lang
 
 logging.basicConfig(
     level=logging.INFO,
@@ -110,6 +110,7 @@ def _render_to_bytes(days: list[date], calendars: list[dict]) -> bytes:
             log.warning("  %-20s → FAILED: %s", name, e)
             events_by_cal[name] = (color, [])
 
+    set_hyphenation_lang(cfg.get("hyphenation_lang", "de_DE"))
     img = render_days(
         days,
         events_by_cal,
@@ -307,8 +308,9 @@ def admin_settings():
         cfg["time_window_hours"] = int(request.form["time_window_hours"])
         cfg["time_start_mode"]  = request.form["time_start_mode"]
         cfg["time_start_hour"]  = int(request.form["time_start_hour"])
-        cfg["today_highlight"]  = "today_highlight" in request.form
-        cfg["view_mode"]        = request.form["view_mode"]
+        cfg["today_highlight"]    = "today_highlight" in request.form
+        cfg["view_mode"]          = request.form["view_mode"]
+        cfg["hyphenation_lang"]   = request.form["hyphenation_lang"]
         config.update(cfg)
     except Exception as e:
         return redirect(url_for("admin_index", error=str(e)))

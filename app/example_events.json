@@ -88,5 +88,47 @@
         "end":   "2026-04-05T12:30:00+02:00"
       }
     ]
+  },
+  {
+    "name": "Familie",
+    "color": "#aaaaaa",
+    "events": [
+      {
+        "summary": "Osterferien",
+        "start":   "2026-04-06",
+        "end":     "2026-04-13",
+        "all_day": true
+      },
+      {
+        "summary": "Kita Elternabend",
+        "start": "2026-04-07T09:00:00+02:00",
+        "end":   "2026-04-07T10:00:00+02:00"
+      },
+      {
+        "summary": "Kinderarzt",
+        "start": "2026-04-08T09:00:00+02:00",
+        "end":   "2026-04-08T09:45:00+02:00"
+      },
+      {
+        "summary": "Kinder abholen",
+        "start": "2026-04-09T15:00:00+02:00",
+        "end":   "2026-04-09T15:30:00+02:00"
+      },
+      {
+        "summary": "Spielplatz",
+        "start": "2026-04-09T15:30:00+02:00",
+        "end":   "2026-04-09T17:00:00+02:00"
+      },
+      {
+        "summary": "Oma besuchen",
+        "start": "2026-04-10T14:00:00+02:00",
+        "end":   "2026-04-10T17:00:00+02:00"
+      },
+      {
+        "summary": "Kindergeburtstag",
+        "start": "2026-04-11T10:00:00+02:00",
+        "end":   "2026-04-11T13:00:00+02:00"
+      }
+    ]
   }
 ]

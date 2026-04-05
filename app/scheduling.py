@@ -105,5 +105,15 @@ def _assign_lanes(
         if not placed:
             ev_lanes.append(len(lane_end))
             lane_end.append(ev.end)
-    num_lanes = len(lane_end)
-    return [(ev, lane, num_lanes) for ev, lane in zip(sorted_evs, ev_lanes)]
+    result = []
+    for ev, lane in zip(sorted_evs, ev_lanes):
+        # Check at every event-start that falls within this event's span —
+        # the max concurrent count there is the correct local num_lanes.
+        checkpoints = {e.start for e in sorted_evs if ev.start <= e.start < ev.end}
+        checkpoints.add(ev.start)
+        num_lanes = max(
+            sum(1 for e in sorted_evs if e.start <= t < e.end)
+            for t in checkpoints
+        )
+        result.append((ev, lane, num_lanes))
+    return result
