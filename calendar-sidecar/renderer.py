@@ -27,11 +27,12 @@ from PIL import Image, ImageDraw, ImageFont
 from caldav_client import CalEvent
 
 # ── Fixed layout constants ────────────────────────────────────────────────────
-HEADER_H    = 28   # day-name + date row
-LEGEND_H    = 18   # calendar legend row
-BODY_TOP    = HEADER_H + LEGEND_H
-ALLDAY_H    = 18   # all-day event strip height
-TIME_AXIS_W = 28   # width of left-side hour-label column
+HEADER_H        = 28   # day-name + date row
+LEGEND_H        = 18   # calendar legend row
+BODY_TOP        = HEADER_H + LEGEND_H
+ALLDAY_ROW_H    = 18   # height of one all-day event row
+MAX_ALLDAY_ROWS = 4    # maximum stacked all-day rows (extras are dropped)
+TIME_AXIS_W     = 28   # width of left-side hour-label column
 
 PADDING     = 2    # inner cell padding
 EVENT_MIN_H = 14   # minimum px height for a timed event block
@@ -83,6 +84,7 @@ class _Layout:
     num_cols:        int
     col_w:           int
     allday_top:      int
+    allday_rows:     int   # actual number of all-day rows in use (1–MAX_ALLDAY_ROWS)
     grid_top:        int
     px_per_hour:     float
     time_start_hour: int
@@ -98,17 +100,20 @@ class _Layout:
         time_window_hours: int,
         time_start_hour: int,
         today_highlight: bool,
+        allday_rows: int = 1,
     ) -> "_Layout":
-        col_w      = (width - TIME_AXIS_W) // num_cols
-        allday_top = BODY_TOP
-        grid_top   = allday_top + ALLDAY_H + 1   # +1 for separator line
-        grid_h     = height - grid_top
+        col_w        = (width - TIME_AXIS_W) // num_cols
+        allday_top   = BODY_TOP
+        allday_strip = allday_rows * ALLDAY_ROW_H
+        grid_top     = allday_top + allday_strip + 1   # +1 for separator line
+        grid_h       = height - grid_top
         return cls(
             width           = width,
             height          = height,
             num_cols        = num_cols,
             col_w           = col_w,
             allday_top      = allday_top,
+            allday_rows     = allday_rows,
             grid_top        = grid_top,
             px_per_hour     = grid_h / time_window_hours,
             time_start_hour = time_start_hour,
@@ -186,36 +191,65 @@ def _collect_day_events(
     return timed, allday
 
 
+def _assign_allday_rows(
+    events: list[CalEvent],
+    days: list[date],
+) -> list[tuple[CalEvent, int, int, int]]:
+    """
+    Greedy row assignment for all-day events.
+
+    Returns a list of (event, first_col, last_col, row) sorted by first_col.
+    Events that don't fit within MAX_ALLDAY_ROWS are dropped.
+    """
+    view_start = days[0]
+    view_end   = days[-1] + timedelta(days=1)
+
+    # Pre-compute column spans
+    spans: list[tuple[CalEvent, int, int]] = []
+    for ev in events:
+        span_start = max(ev.start.date(), view_start)
+        span_end   = min(ev.end.date(),   view_end)
+        first_col  = next(i for i, d in enumerate(days) if d >= span_start)
+        last_col   = next((i - 1 for i, d in enumerate(days) if d >= span_end),
+                          len(days) - 1)
+        spans.append((ev, first_col, last_col))
+
+    spans.sort(key=lambda x: x[1])  # sort by start column
+
+    # row_end[r] = last column occupied in row r (-1 = empty)
+    row_end: list[int] = [-1] * MAX_ALLDAY_ROWS
+    result: list[tuple[CalEvent, int, int, int]] = []
+    for ev, first_col, last_col in spans:
+        for r in range(MAX_ALLDAY_ROWS):
+            if row_end[r] < first_col:  # no overlap with this row
+                row_end[r] = last_col
+                result.append((ev, first_col, last_col, r))
+                break
+        # if all rows are full for this span, the event is silently dropped
+
+    return result
+
+
 def _draw_allday_strip(
     draw: ImageDraw.ImageDraw,
     layout: _Layout,
-    days: list[date],
-    allday_events: list[CalEvent],
+    allday_assignments: list[tuple[CalEvent, int, int, int]],
 ) -> None:
+    strip_h = layout.allday_rows * ALLDAY_ROW_H
     draw.line([TIME_AXIS_W - 1, layout.allday_top, TIME_AXIS_W - 1, layout.height],
               fill=MGREY, width=1)
-    draw.line([0, layout.allday_top + ALLDAY_H, layout.width, layout.allday_top + ALLDAY_H],
+    draw.line([0, layout.allday_top + strip_h, layout.width, layout.allday_top + strip_h],
               fill=MGREY, width=1)
 
-    view_start = days[0]
-    view_end   = days[-1] + timedelta(days=1)   # exclusive
-
-    for ev in allday_events:
-        # Clamp span to visible columns
-        span_start = max(ev.start.date(), view_start)
-        span_end   = min(ev.end.date(),   view_end)   # CalDAV end is exclusive
-
-        first_col = next(i for i, d in enumerate(days) if d >= span_start)
-        last_col  = next((i - 1 for i, d in enumerate(days) if d >= span_end),
-                         len(days) - 1)
-
+    for ev, first_col, last_col, row in allday_assignments:
+        y0   = layout.allday_top + row * ALLDAY_ROW_H + 1
+        y1   = y0 + ALLDAY_ROW_H - 2
         x0   = TIME_AXIS_W + first_col * layout.col_w + PADDING
         x1   = TIME_AXIS_W + (last_col + 1) * layout.col_w - PADDING
         grey = _event_fill(_hex_to_grey(ev.color))
-        draw.rectangle([x0, layout.allday_top + 1, x1, layout.allday_top + ALLDAY_H - 2],
-                       fill=grey, outline=BLACK)
+        draw.rectangle([x0, y0, x1, y1], fill=grey, outline=BLACK)
         lbl = _truncate(ev.summary, x1 - x0 - 4, FONT_EVENT, draw)
-        draw.text((x0 + 2, layout.allday_top + 2), lbl, font=FONT_EVENT,
+        draw.text((x0 + 2, y0 + 2), lbl, font=FONT_EVENT,
                   fill=WHITE if grey < 128 else BLACK)
 
 
@@ -296,9 +330,13 @@ def render_days(
         time_start_hour:    First visible hour (0–23).
         today_highlight:    Shade today's column.
     """
-    layout              = _Layout.build(len(days), width, height,
-                                        time_window_hours, time_start_hour, today_highlight)
     timed_events, allday_events = _collect_day_events(days, events_by_cal)
+    allday_assignments  = _assign_allday_rows(allday_events, days)
+    used_rows           = max((r for _, _, _, r in allday_assignments), default=-1) + 1
+    allday_rows         = max(1, min(used_rows, MAX_ALLDAY_ROWS))
+    layout              = _Layout.build(len(days), width, height,
+                                        time_window_hours, time_start_hour, today_highlight,
+                                        allday_rows)
     today               = date.today()
 
     img  = Image.new("L", (width, height), WHITE)
@@ -306,7 +344,7 @@ def render_days(
 
     _draw_header(draw, layout, days, today)
     _draw_legend(draw, layout, events_by_cal)
-    _draw_allday_strip(draw, layout, days, allday_events)
+    _draw_allday_strip(draw, layout, allday_assignments)
     _draw_time_axis(draw, layout)
     _draw_now_indicator(draw, layout, days, today)
     _draw_timed_events(draw, layout, timed_events)
