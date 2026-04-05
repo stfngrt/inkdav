@@ -48,6 +48,22 @@ DGREY = 80    # header background
 # Spaced so each dithers to a visually distinct dot pattern on e-ink.
 _CAL_FILLS = [0, 80, 160, 220]   # black / dark / medium / light
 
+
+def _hex_to_grey(hex_color: str) -> int:
+    """Convert a hex color string to 0–255 greyscale via luminance."""
+    h = hex_color.lstrip("#")
+    r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    return round(0.299 * r + 0.587 * g + 0.114 * b)
+
+
+def _event_fill(grey: int) -> int:
+    """Map a 0–255 greyscale value to a discrete fill level for e-ink rendering."""
+    if grey < 80:
+        return BLACK
+    if grey < 160:
+        return DGREY
+    return MGREY
+
 # ── Fonts ─────────────────────────────────────────────────────────────────────
 def _font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont:
     candidates = [
