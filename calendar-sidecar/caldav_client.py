@@ -106,11 +106,16 @@ def _component_to_event(
     else:
         end = start + timedelta(hours=1)
 
-    # Filter: keep events that actually overlap [week_start, week_end)
-    # Use end.date() for overlap so multi-day all-day events starting before
-    # the window are still included.
-    if start.date() >= week_end or end.date() <= week_start:
-        return None
+    # Filter: keep events that actually overlap [week_start, week_end).
+    # All-day DTEND is exclusive in CalDAV (DTEND=Apr 5 means ends before Apr 5),
+    # so <= is correct there. Timed events ending on week_start (e.g. 15:00 on
+    # Apr 5) do overlap the window, so use strict < for those.
+    if all_day:
+        if start.date() >= week_end or end.date() <= week_start:
+            return None
+    else:
+        if start.date() >= week_end or end.date() < week_start:
+            return None
 
     return CalEvent(
         summary  = summary,
