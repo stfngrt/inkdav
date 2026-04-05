@@ -160,32 +160,28 @@ def refresh() -> None:
 
 
 def _fire_webhooks() -> None:
-    """POST merge_variables to every enabled webhook after a successful refresh."""
+    """POST the current PNG image to every enabled webhook after a successful refresh."""
     hooks = config.webhooks()
     if not hooks:
         return
 
-    today      = date.today()
-    week_start = _monday_of(today)
-    week_end   = week_start + timedelta(days=6)
-    week_label = (
-        f"{week_start.strftime('%b %-d')} \u2013 {week_end.strftime('%b %-d, %Y')}"
-    )
+    with _lock:
+        png_bytes = _png_current
+
+    if not png_bytes:
+        log.warning("No PNG available to push via webhooks")
+        return
 
     for hook in hooks:
         if not hook.get("enabled", True):
             continue
-        base = hook.get("image_base_url", "http://calendar:8080").rstrip("/")
-        payload = {
-            "merge_variables": {
-                "image_url":      f"{base}/week.png",
-                "next_image_url": f"{base}/next.png",
-                "week":           week_label,
-                "refreshed_at":   datetime.now().isoformat(timespec="seconds"),
-            }
-        }
         try:
-            r = _requests.post(hook["url"], json=payload, timeout=10)
+            r = _requests.post(
+                hook["url"],
+                data=png_bytes,
+                headers={"Content-Type": "image/png"},
+                timeout=10,
+            )
             r.raise_for_status()
             log.info("Webhook [%s] → HTTP %d", hook["name"], r.status_code)
         except Exception as e:
