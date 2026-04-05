@@ -7,7 +7,10 @@
   <style>
     *, *::before, *::after { box-sizing: border-box; }
     body   { font-family: system-ui, sans-serif; background: #f0f0f0; color: #222; margin: 0; padding: 20px; }
-    h1     { font-size: 1.3rem; margin: 0 0 18px; }
+    .site-header { display: flex; align-items: center; gap: 12px; margin-bottom: 18px; }
+    .site-header img { width: 48px; height: 48px; image-rendering: pixelated; }
+    .site-header h1 { font-size: 1.3rem; margin: 0; }
+    .site-header .subtitle { font-size: 0.78rem; color: #888; margin: 2px 0 0; }
     h2     { font-size: 1rem; margin: 24px 0 8px; border-bottom: 1px solid #ccc; padding-bottom: 4px; }
     section { background: #fff; border: 1px solid #ddd; border-radius: 6px; padding: 16px; margin-bottom: 20px; }
     label  { display: block; font-size: 0.85rem; font-weight: 600; margin-bottom: 2px; margin-top: 10px; }
@@ -39,7 +42,13 @@
 </head>
 <body>
 
-<h1>TRMNL Calendar Admin</h1>
+<header class="site-header">
+  <img src="{{ url_for('static', filename='logo.png') }}" alt="inkdav logo">
+  <div>
+    <h1>inkdav</h1>
+    <div class="subtitle">CalDAV &rarr; e&#8209;ink</div>
+  </div>
+</header>
 
 {% if saved %}
 <div class="flash-ok">Changes saved successfully.</div>
