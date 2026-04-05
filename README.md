@@ -8,12 +8,10 @@ CalDAV sources ──┐
 CalDAV sources ──┤   calendar sidecar :8080
 CalDAV sources ──┘   fetches & renders every 15 min
                             │
-                     webhook POST (merge_variables)
+                     webhook POST (PNG bytes)
                             │
-                        BYOS :4567
+                        BYOS :4567          ←── TRMNL device polls /display
                         (larapaper)
-                            │
-                        TRMNL device
 ```
 
 ---
@@ -70,29 +68,39 @@ curl -u "alice:APP-PASSWORD" \
 | `#999999` | Mid grey |
 | `#cccccc` | Light grey |
 
-### 4. Configure a webhook
+### 4. Create an Image Webhook plugin in BYOS
 
-In the admin UI (**http://localhost:5001**), add a webhook pointing at your BYOS device webhook URL:
+The sidecar pushes the rendered PNG directly to larapaper using the **Image Webhook** plugin type.
 
-- **Webhook URL** — copy from BYOS → Plugin settings (e.g. `http://byos:8080/webhooks/{token}`)
-- **Image base URL** — `http://calendar:8080` (how BYOS reaches the sidecar within Docker)
+1. Open the BYOS dashboard at **http://localhost:4567**
+2. Go to **Plugins → New Plugin** and choose type **Image Webhook**
+3. Give it a name (e.g. `Week Calendar`) and save
+4. Copy the webhook URL from the plugin page — it looks like:
+   `http://localhost:4567/api/plugin_settings/<uuid>/image`
+5. Go to **Devices → your device → Playlist** and add the plugin
 
-After saving, click **Trigger refresh** to send the first push.
+### 5. Add the webhook to the calendar sidecar
 
-### 5. Set up the recipe in BYOS
+Open the calendar admin UI at **http://localhost:5001**, go to the **Webhooks** section, and add a new entry:
 
-1. BYOS → **Plugins → Recipes**
-2. Select the `nextcloud-calendar` recipe (pre-mounted from `./plugin/`)
-3. Assign it to your device
+| Field | Value |
+|-------|-------|
+| **Name** | any label, e.g. `BYOS` |
+| **Webhook URL** | `http://trmnl-byos:8080/api/plugin_settings/<uuid>/image` |
 
-The recipe uses these merge variables sent by the webhook:
+> **Important:** use `http://trmnl-byos:8080` (container name + internal port), **not** `http://localhost:4567`.
+> Both containers share the `trmnl_net` Docker bridge network, so `trmnl-byos` resolves correctly from within the sidecar.
+> `localhost:4567` is the host-side port mapping and is unreachable from inside Docker.
 
-| Variable | Example |
-|----------|---------|
-| `image_url` | `http://calendar:8080/week.png` |
-| `next_image_url` | `http://calendar:8080/next.png` |
-| `week` | `Apr 7 – Apr 13, 2026` |
-| `refreshed_at` | `2026-04-04T10:30:00` |
+After saving, click **Trigger refresh**. Check the logs to confirm success:
+
+```bash
+docker compose logs calendar --tail=20
+# You should see:
+# Webhook [BYOS] → HTTP 200
+```
+
+The sidecar POSTs the current PNG as raw bytes (`Content-Type: image/png`) to the BYOS endpoint after every successful CalDAV render. BYOS stores the image and serves it to your TRMNL device on the next poll.
 
 ---
 
@@ -117,8 +125,6 @@ The following environment variables set defaults on **first run only** (before `
 trmnl-week-calendar/
 ├── docker-compose.yml
 ├── .env.example
-├── plugin/
-│   └── nextcloud-calendar.blade.php   # BYOS recipe template
 └── calendar-sidecar/
     ├── Dockerfile
     ├── requirements.txt
@@ -137,7 +143,10 @@ trmnl-week-calendar/
 | Problem | Fix |
 |---------|-----|
 | No events in PNG | Check `/health` and logs: `docker compose logs calendar` |
-| Webhook not received by BYOS | Verify the webhook URL in the admin UI; check `docker compose logs byos` |
+| `Webhook failed: Connection refused` | URL uses `localhost` — use `http://trmnl-byos:8080/...` instead |
+| `Webhook failed: 400 Bad Request` | Plugin type is not **Image Webhook** in BYOS — recreate the plugin with the correct type |
+| `Webhook failed: 404 Not Found` | Wrong UUID in the webhook URL — copy it from the BYOS plugin page |
+| `Webhook [BYOS] → HTTP 200` but no image on device | Plugin not added to device playlist in BYOS |
 | 401 from CalDAV | Wrong app password – create a new one in Nextcloud → Settings → Security |
 | 404 from CalDAV | Wrong calendar URL – use the `curl PROPFIND` command above to list slugs |
 | Wrong timezone | Change in the admin UI → Settings → Timezone |
