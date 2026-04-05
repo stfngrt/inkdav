@@ -160,39 +160,61 @@ def _draw_legend(
 def _collect_day_events(
     days: list[date],
     events_by_cal: dict[str, tuple[str, list[CalEvent]]],
-) -> dict[int, list[CalEvent]]:
-    """Map column index → events for that day."""
-    day_index = {d: i for i, d in enumerate(days)}
-    result: dict[int, list[CalEvent]] = {i: [] for i in range(len(days))}
+) -> tuple[dict[int, list[CalEvent]], list[CalEvent]]:
+    """
+    Returns:
+        timed   – col → timed events whose start date falls in that column
+        allday  – all-day events that overlap the visible day range (any span)
+    """
+    day_index  = {d: i for i, d in enumerate(days)}
+    view_start = days[0]
+    view_end   = days[-1] + timedelta(days=1)   # exclusive
+    timed:  dict[int, list[CalEvent]] = {i: [] for i in range(len(days))}
+    allday: list[CalEvent] = []
+
     for _, (_, events) in events_by_cal.items():
         for ev in events:
-            col = day_index.get(ev.start.date())
-            if col is not None:
-                result[col].append(ev)
-    return result
+            if ev.all_day:
+                # Include if event overlaps the visible window at all
+                if ev.start.date() < view_end and ev.end.date() > view_start:
+                    allday.append(ev)
+            else:
+                col = day_index.get(ev.start.date())
+                if col is not None:
+                    timed[col].append(ev)
+
+    return timed, allday
 
 
 def _draw_allday_strip(
     draw: ImageDraw.ImageDraw,
     layout: _Layout,
-    day_events: dict[int, list[CalEvent]],
+    days: list[date],
+    allday_events: list[CalEvent],
 ) -> None:
     draw.line([TIME_AXIS_W - 1, layout.allday_top, TIME_AXIS_W - 1, layout.height],
               fill=MGREY, width=1)
     draw.line([0, layout.allday_top + ALLDAY_H, layout.width, layout.allday_top + ALLDAY_H],
               fill=MGREY, width=1)
-    for col, evs in day_events.items():
-        allday_evs = [e for e in evs if e.all_day]
-        if not allday_evs:
-            continue
-        x0  = TIME_AXIS_W + col * layout.col_w + PADDING
-        cw  = layout.col_w - PADDING * 2
-        ev  = allday_evs[0]
-        pfx = f"({len(allday_evs)}) " if len(allday_evs) > 1 else ""
-        lbl = _truncate(pfx + ev.summary, cw - 4, FONT_EVENT, draw)
+
+    view_start = days[0]
+    view_end   = days[-1] + timedelta(days=1)   # exclusive
+
+    for ev in allday_events:
+        # Clamp span to visible columns
+        span_start = max(ev.start.date(), view_start)
+        span_end   = min(ev.end.date(),   view_end)   # CalDAV end is exclusive
+
+        first_col = next(i for i, d in enumerate(days) if d >= span_start)
+        last_col  = next((i - 1 for i, d in enumerate(days) if d >= span_end),
+                         len(days) - 1)
+
+        x0   = TIME_AXIS_W + first_col * layout.col_w + PADDING
+        x1   = TIME_AXIS_W + (last_col + 1) * layout.col_w - PADDING
         grey = _event_fill(_hex_to_grey(ev.color))
-        draw.rectangle([x0, layout.allday_top + 1, x0 + cw, layout.allday_top + ALLDAY_H - 2],
+        draw.rectangle([x0, layout.allday_top + 1, x1, layout.allday_top + ALLDAY_H - 2],
                        fill=grey, outline=BLACK)
+        lbl = _truncate(ev.summary, x1 - x0 - 4, FONT_EVENT, draw)
         draw.text((x0 + 2, layout.allday_top + 2), lbl, font=FONT_EVENT,
                   fill=WHITE if grey < 128 else BLACK)
 
@@ -232,10 +254,7 @@ def _draw_timed_events(
     day_events: dict[int, list[CalEvent]],
 ) -> None:
     for col, evs in day_events.items():
-        timed_evs = sorted(
-            [e for e in evs if not e.all_day],
-            key=lambda e: e.start,
-        )
+        timed_evs = sorted(evs, key=lambda e: e.start)
         x0 = TIME_AXIS_W + col * layout.col_w + PADDING
         cw = layout.col_w - PADDING * 2
         for ev in timed_evs:
@@ -277,20 +296,20 @@ def render_days(
         time_start_hour:    First visible hour (0–23).
         today_highlight:    Shade today's column.
     """
-    layout     = _Layout.build(len(days), width, height,
-                               time_window_hours, time_start_hour, today_highlight)
-    day_events = _collect_day_events(days, events_by_cal)
-    today      = date.today()
+    layout              = _Layout.build(len(days), width, height,
+                                        time_window_hours, time_start_hour, today_highlight)
+    timed_events, allday_events = _collect_day_events(days, events_by_cal)
+    today               = date.today()
 
     img  = Image.new("L", (width, height), WHITE)
     draw = ImageDraw.Draw(img)
 
     _draw_header(draw, layout, days, today)
     _draw_legend(draw, layout, events_by_cal)
-    _draw_allday_strip(draw, layout, day_events)
+    _draw_allday_strip(draw, layout, days, allday_events)
     _draw_time_axis(draw, layout)
     _draw_now_indicator(draw, layout, days, today)
-    _draw_timed_events(draw, layout, day_events)
+    _draw_timed_events(draw, layout, timed_events)
 
     return img.convert("1", dither=Image.Dither.FLOYDSTEINBERG).convert("L")
 
@@ -308,6 +327,36 @@ def render_week(
 ) -> Image.Image:
     """Render a Mon–Sun week grid."""
     days = [week_start + timedelta(days=i) for i in range(7)]
+    return render_days(days, events_by_cal, width, height,
+                       time_window_hours, time_start_hour, today_highlight)
+
+
+def render_rolling(
+    events_by_cal: dict[str, tuple[str, list[CalEvent]]],
+    start: date,
+    width: int = 800,
+    height: int = 480,
+    time_window_hours: int = 12,
+    time_start_hour: int = 8,
+    today_highlight: bool = False,
+) -> Image.Image:
+    """Render a 7-day rolling view starting from start."""
+    days = [start + timedelta(days=i) for i in range(7)]
+    return render_days(days, events_by_cal, width, height,
+                       time_window_hours, time_start_hour, today_highlight)
+
+
+def render_3day(
+    events_by_cal: dict[str, tuple[str, list[CalEvent]]],
+    start: date,
+    width: int = 800,
+    height: int = 480,
+    time_window_hours: int = 12,
+    time_start_hour: int = 8,
+    today_highlight: bool = False,
+) -> Image.Image:
+    """Render a 3-day view starting from start."""
+    days = [start + timedelta(days=i) for i in range(3)]
     return render_days(days, events_by_cal, width, height,
                        time_window_hours, time_start_hour, today_highlight)
 

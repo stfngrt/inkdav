@@ -93,6 +93,17 @@
     </div>
     <div class="row" style="margin-top:10px">
       <div>
+        <label for="view_mode">View</label>
+        <select id="view_mode" name="view_mode"
+                style="width:100%;padding:6px 8px;border:1px solid #bbb;border-radius:4px;font-size:0.9rem">
+          <option value="week"    {% if cfg.view_mode == 'week'    %}selected{% endif %}>Week (Mon–Sun)</option>
+          <option value="rolling" {% if cfg.view_mode == 'rolling' %}selected{% endif %}>Rolling 7-day</option>
+          <option value="3day"    {% if cfg.view_mode == '3day'    %}selected{% endif %}>3-day</option>
+        </select>
+      </div>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <div>
         <label for="time_window_hours">Time window (hours shown)</label>
         <input type="number" id="time_window_hours" name="time_window_hours"
                value="{{ cfg.time_window_hours }}" min="1" max="24" required>

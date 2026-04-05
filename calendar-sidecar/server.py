@@ -28,9 +28,9 @@ from zoneinfo import ZoneInfo
 import requests as _requests
 
 import config
-from caldav_client import CalEvent, fetch_week
+from caldav_client import CalEvent, fetch_range
 from flask import Flask, redirect, render_template, request, url_for
-from renderer import render_week
+from renderer import render_days
 
 logging.basicConfig(
     level=logging.INFO,
@@ -55,14 +55,15 @@ def _monday_of(d: date) -> date:
     return d - timedelta(days=d.weekday())
 
 
-def _time_start_for(week_start: date) -> int:
-    """Compute the first visible hour for a given week based on config."""
-    cfg = config.get()
+def _time_start_for(window_start: date) -> int:
+    """Compute the first visible hour for a given window start date based on config."""
+    cfg    = config.get()
     window = int(cfg["time_window_hours"])
     mode   = cfg["time_start_mode"]
     fixed  = int(cfg["time_start_hour"])
 
-    if mode == "auto" and week_start == _monday_of(date.today()):
+    today = date.today()
+    if mode == "auto" and window_start <= today <= window_start + timedelta(days=6):
         local_tz = ZoneInfo(config.timezone())
         now      = datetime.now(tz=local_tz)
         frac     = now.hour + now.minute / 60
@@ -73,26 +74,29 @@ def _time_start_for(week_start: date) -> int:
     return fixed
 
 
-def _render_to_bytes(week_start: date, calendars: list[dict]) -> bytes:
-    cfg               = config.get()
-    local_tz          = ZoneInfo(cfg["timezone"])
-    width, height     = int(cfg["render_width"]), int(cfg["render_height"])
-    time_window       = int(cfg["time_window_hours"])
-    time_start        = _time_start_for(week_start)
+def _render_to_bytes(days: list[date], calendars: list[dict]) -> bytes:
+    cfg           = config.get()
+    local_tz      = ZoneInfo(cfg["timezone"])
+    width, height = int(cfg["render_width"]), int(cfg["render_height"])
+    time_window   = int(cfg["time_window_hours"])
+    time_start    = _time_start_for(days[0])
+    fetch_start   = days[0]
+    fetch_end     = days[-1] + timedelta(days=1)
     events_by_cal: dict[str, tuple[str, list[CalEvent]]] = {}
 
     for cal in calendars:
         name  = cal["name"]
         color = cal["color"]
         try:
-            evs = fetch_week(
-                url        = cal["url"],
-                user       = cal["user"],
-                password   = cal["password"],
-                cal_name   = name,
-                color      = color,
-                week_start = week_start,
-                local_tz   = local_tz,
+            evs = fetch_range(
+                url      = cal["url"],
+                user     = cal["user"],
+                password = cal["password"],
+                cal_name = name,
+                color    = color,
+                start    = fetch_start,
+                end      = fetch_end,
+                local_tz = local_tz,
             )
             events_by_cal[name] = (color, evs)
             log.info("  %-20s → %d events", name, len(evs))
@@ -100,9 +104,9 @@ def _render_to_bytes(week_start: date, calendars: list[dict]) -> bytes:
             log.warning("  %-20s → FAILED: %s", name, e)
             events_by_cal[name] = (color, [])
 
-    img = render_week(
+    img = render_days(
+        days,
         events_by_cal,
-        week_start,
         width=width,
         height=height,
         time_window_hours=time_window,
@@ -114,19 +118,34 @@ def _render_to_bytes(week_start: date, calendars: list[dict]) -> bytes:
     return buf.getvalue()
 
 
+def _window_days(view_mode: str, offset: int = 0) -> list[date]:
+    """Return the list of days to render for the given view mode and offset window."""
+    today = date.today()
+    if view_mode == "rolling":
+        start = today + timedelta(days=7 * offset)
+        return [start + timedelta(days=i) for i in range(7)]
+    if view_mode == "3day":
+        start = today + timedelta(days=3 * offset)
+        return [start + timedelta(days=i) for i in range(3)]
+    # default: "week" — Mon–Sun
+    monday = today - timedelta(days=today.weekday())
+    start  = monday + timedelta(weeks=offset)
+    return [start + timedelta(days=i) for i in range(7)]
+
+
 def refresh() -> None:
     global _png_current, _png_next, _last_fetch, _last_error
 
-    calendars  = config.calendars()
-    today      = date.today()
-    this_week  = _monday_of(today)
-    next_week  = this_week + timedelta(weeks=1)
+    calendars = config.calendars()
+    view_mode = config.get().get("view_mode", "week")
+    current_days = _window_days(view_mode, offset=0)
+    next_days    = _window_days(view_mode, offset=1)
 
-    log.info("Refreshing calendars (week %s)…", this_week.isoformat())
+    log.info("Refreshing calendars (view=%s, start=%s)…", view_mode, current_days[0].isoformat())
 
     try:
-        current = _render_to_bytes(this_week, calendars)
-        nxt     = _render_to_bytes(next_week, calendars)
+        current = _render_to_bytes(current_days, calendars)
+        nxt     = _render_to_bytes(next_days,    calendars)
         with _lock:
             _png_current = current
             _png_next    = nxt
@@ -281,6 +300,7 @@ def admin_settings():
         cfg["time_start_mode"]  = request.form["time_start_mode"]
         cfg["time_start_hour"]  = int(request.form["time_start_hour"])
         cfg["today_highlight"]  = "today_highlight" in request.form
+        cfg["view_mode"]        = request.form["view_mode"]
         config.update(cfg)
     except Exception as e:
         return redirect(url_for("admin_index", error=str(e)))
