@@ -80,10 +80,10 @@ def _font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont:
             return ImageFont.truetype(path, size)
     return ImageFont.load_default()
 
-FONT_DAY    = _font(11, bold=True)
-FONT_EVENT  = _font(10)
-FONT_TIME   = _font(9)
-FONT_LEGEND = _font(9)
+FONT_DAY    = _font(12, bold=True)
+FONT_EVENT  = _font(10, bold=True)
+FONT_TIME   = _font(10)
+FONT_LEGEND = _font(10)
 
 DAY_NAMES = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]
 
@@ -161,19 +161,24 @@ def _draw_header(
     layout: _Layout,
     days: list[date],
     today: date,
+    text_pass: bool = False,
 ) -> None:
-    draw.rectangle([0, 0, layout.width, HEADER_H - 1], fill=DGREY)
-    for col, day in enumerate(days):
-        x0 = TIME_AXIS_W + col * layout.col_w
-        x1 = x0 + layout.col_w - 1
-        if day == today and layout.today_highlight:
-            draw.rectangle([x0, HEADER_H, x1, layout.height - 1], fill=LGREY)
-            draw.rectangle([x0, HEADER_H, x1, layout.height - 1], outline=MGREY, width=1)
-        if col > 0:
-            draw.line([x0, 0, x0, layout.height], fill=MGREY, width=1)
-        label = f"{DAY_NAMES[day.weekday()]} {day.day:02d}.{day.month:02d}."
-        tw    = draw.textlength(label, font=FONT_DAY)
-        draw.text((x0 + (layout.col_w - tw) / 2, 5), label, font=FONT_DAY, fill=WHITE)
+    if not text_pass:
+        draw.rectangle([0, 0, layout.width, HEADER_H - 1], fill=DGREY)
+        for col, day in enumerate(days):
+            x0 = TIME_AXIS_W + col * layout.col_w
+            x1 = x0 + layout.col_w - 1
+            if day == today and layout.today_highlight:
+                draw.rectangle([x0, HEADER_H, x1, layout.height - 1], fill=LGREY)
+                draw.rectangle([x0, HEADER_H, x1, layout.height - 1], outline=MGREY, width=1)
+            if col > 0:
+                draw.line([x0, 0, x0, layout.height], fill=MGREY, width=1)
+    else:
+        for col, day in enumerate(days):
+            x0    = TIME_AXIS_W + col * layout.col_w
+            label = f"{DAY_NAMES[day.weekday()]} {day.day:02d}.{day.month:02d}."
+            tw    = draw.textlength(label, font=FONT_DAY)
+            draw.text((x0 + (layout.col_w - tw) / 2, 5), label, font=FONT_DAY, fill=WHITE)
 
 
 def _draw_legend(
@@ -181,18 +186,23 @@ def _draw_legend(
     layout: _Layout,
     events_by_cal: dict[str, tuple[str, list[CalEvent]]],
     fill_map: dict[str, int],
+    text_pass: bool = False,
 ) -> None:
-    draw.rectangle([0, HEADER_H, layout.width, HEADER_H + LEGEND_H - 1], fill=245)
-    draw.line([0, HEADER_H + LEGEND_H - 1, layout.width, HEADER_H + LEGEND_H - 1],
-              fill=MGREY, width=1)
     lx = TIME_AXIS_W + PADDING
-    for cal_name, (color, _) in events_by_cal.items():
-        fill = fill_map.get(color, BLACK)
-        draw.rectangle([lx, HEADER_H + 3, lx + 10, HEADER_H + LEGEND_H - 4],
-                       fill=fill, outline=BLACK)
-        lx += 14
-        draw.text((lx, HEADER_H + 3), cal_name, font=FONT_LEGEND, fill=BLACK)
-        lx += int(draw.textlength(cal_name, font=FONT_LEGEND)) + 14
+    if not text_pass:
+        draw.rectangle([0, HEADER_H, layout.width, HEADER_H + LEGEND_H - 1], fill=245)
+        draw.line([0, HEADER_H + LEGEND_H - 1, layout.width, HEADER_H + LEGEND_H - 1],
+                  fill=MGREY, width=1)
+        for cal_name, (color, _) in events_by_cal.items():
+            fill = fill_map.get(color, BLACK)
+            draw.rectangle([lx, HEADER_H + 3, lx + 10, HEADER_H + LEGEND_H - 4],
+                           fill=fill, outline=BLACK)
+            lx += 14 + int(draw.textlength(cal_name, font=FONT_LEGEND)) + 14
+    else:
+        for cal_name, (color, _) in events_by_cal.items():
+            lx += 14
+            draw.text((lx, HEADER_H + 3), cal_name, font=FONT_LEGEND, fill=BLACK)
+            lx += int(draw.textlength(cal_name, font=FONT_LEGEND)) + 14
 
 
 def _draw_allday_strip(
@@ -200,33 +210,40 @@ def _draw_allday_strip(
     layout: _Layout,
     allday_assignments: list[tuple[CalEvent, int, int, int]],
     fill_map: dict[str, int],
+    text_pass: bool = False,
 ) -> None:
     strip_h = layout.allday_rows * ALLDAY_ROW_H
-    draw.line([TIME_AXIS_W - 1, layout.allday_top, TIME_AXIS_W - 1, layout.height],
-              fill=MGREY, width=1)
-    draw.line([0, layout.allday_top + strip_h, layout.width, layout.allday_top + strip_h],
-              fill=MGREY, width=1)
+    if not text_pass:
+        draw.line([TIME_AXIS_W - 1, layout.allday_top, TIME_AXIS_W - 1, layout.height],
+                  fill=MGREY, width=1)
+        draw.line([0, layout.allday_top + strip_h, layout.width, layout.allday_top + strip_h],
+                  fill=MGREY, width=1)
+        for ev, first_col, last_col, row in allday_assignments:
+            y0   = layout.allday_top + row * ALLDAY_ROW_H + 1
+            y1   = y0 + ALLDAY_ROW_H - 2
+            x0   = TIME_AXIS_W + first_col * layout.col_w + PADDING
+            x1   = TIME_AXIS_W + (last_col + 1) * layout.col_w - PADDING
+            fill = fill_map.get(ev.color, BLACK)
+            draw.rectangle([x0, y0, x1, y1], fill=WHITE, outline=BLACK)
+            draw.rectangle([x0, y0, x0 + 3, y1], fill=fill)
+    else:
+        for ev, first_col, last_col, row in allday_assignments:
+            y0  = layout.allday_top + row * ALLDAY_ROW_H + 1
+            x0  = TIME_AXIS_W + first_col * layout.col_w + PADDING
+            x1  = TIME_AXIS_W + (last_col + 1) * layout.col_w - PADDING
+            lbl = _truncate(ev.summary, x1 - x0 - 6, FONT_EVENT, draw)
+            draw.text((x0 + 6, y0 + 2), lbl, font=FONT_EVENT, fill=BLACK)
 
-    for ev, first_col, last_col, row in allday_assignments:
-        y0   = layout.allday_top + row * ALLDAY_ROW_H + 1
-        y1   = y0 + ALLDAY_ROW_H - 2
-        x0   = TIME_AXIS_W + first_col * layout.col_w + PADDING
-        x1   = TIME_AXIS_W + (last_col + 1) * layout.col_w - PADDING
-        fill = fill_map.get(ev.color, BLACK)
-        # Stripe style: outline + left color bar (consistent with timed events)
-        draw.rectangle([x0, y0, x1, y1], outline=BLACK)
-        draw.rectangle([x0, y0, x0 + 3, y1], fill=fill)
-        lbl = _truncate(ev.summary, x1 - x0 - 6, FONT_EVENT, draw)
-        draw.text((x0 + 6, y0 + 2), lbl, font=FONT_EVENT, fill=BLACK)
 
-
-def _draw_time_axis(draw: ImageDraw.ImageDraw, layout: _Layout) -> None:
+def _draw_time_axis(draw: ImageDraw.ImageDraw, layout: _Layout, text_pass: bool = False) -> None:
     for h in range(layout.time_start_hour, min(layout.time_end_hour + 1, 25)):
         y = layout.grid_top + int((h - layout.time_start_hour) * layout.px_per_hour)
         if y >= layout.height:
             break
-        draw.line([TIME_AXIS_W, y, layout.width, y], fill=MGREY, width=1)
-        draw.text((1, y - 9), f"{h:02d}", font=FONT_TIME, fill=BLACK)
+        if not text_pass:
+            draw.line([TIME_AXIS_W, y, layout.width, y], fill=MGREY, width=1)
+        else:
+            draw.text((1, y - 9), f"{h:02d}", font=FONT_TIME, fill=BLACK)
 
 
 def _draw_now_indicator(
@@ -257,6 +274,7 @@ def _draw_timed_events(
     layout: _Layout,
     day_events: dict[int, list[CalEvent]],
     fill_map: dict[str, int],
+    text_pass: bool = False,
 ) -> None:
     for col, evs in day_events.items():
         col_x0 = TIME_AXIS_W + col * layout.col_w + PADDING
@@ -274,7 +292,8 @@ def _draw_timed_events(
             y1 = layout.grid_top + int((vis_end   - layout.time_start_hour) * layout.px_per_hour) - 1
             if y1 - y0 < EVENT_MIN_H:
                 y1 = y0 + EVENT_MIN_H
-            _draw_timed_block(draw, ev, x0, y0, y1, lw, fill_map.get(ev.color, BLACK))
+            _draw_timed_block(draw, ev, x0, y0, y1, lw, fill_map.get(ev.color, BLACK),
+                              text_pass=text_pass)
 
 
 # ── Core renderer ─────────────────────────────────────────────────────────────
@@ -312,17 +331,28 @@ def render_days(
                                         allday_rows)
     today               = date.today()
 
+    # Pass 1: graphics only (fills, lines, outlines) — will be dithered
     img  = Image.new("L", (width, height), WHITE)
     draw = ImageDraw.Draw(img)
+    _draw_header(draw, layout, days, today, text_pass=False)
+    _draw_legend(draw, layout, events_by_cal, fill_map, text_pass=False)
+    _draw_allday_strip(draw, layout, allday_assignments, fill_map, text_pass=False)
+    _draw_time_axis(draw, layout, text_pass=False)
+    _draw_now_indicator(draw, layout, days, today)
+    _draw_timed_events(draw, layout, timed_events, fill_map, text_pass=False)
 
-    _draw_header(draw, layout, days, today)
-    _draw_legend(draw, layout, events_by_cal, fill_map)
-    _draw_allday_strip(draw, layout, allday_assignments, fill_map)
-    _draw_time_axis(draw, layout)
-    _draw_now_indicator(draw, layout, days, today)   # drawn before events
-    _draw_timed_events(draw, layout, timed_events, fill_map)  # events on top
+    # Dither graphics; text is drawn after so anti-aliased edges are never dithered
+    img  = img.convert("1", dither=Image.Dither.FLOYDSTEINBERG).convert("L")
+    draw = ImageDraw.Draw(img)
 
-    return img.convert("1", dither=Image.Dither.FLOYDSTEINBERG).convert("L")
+    # Pass 2: text only — drawn on clean 1-bit result
+    _draw_header(draw, layout, days, today, text_pass=True)
+    _draw_legend(draw, layout, events_by_cal, fill_map, text_pass=True)
+    _draw_allday_strip(draw, layout, allday_assignments, fill_map, text_pass=True)
+    _draw_time_axis(draw, layout, text_pass=True)
+    _draw_timed_events(draw, layout, timed_events, fill_map, text_pass=True)
+
+    return img
 
 
 # ── Public view functions ─────────────────────────────────────────────────────
@@ -394,10 +424,13 @@ def _wrap_text(text: str, max_px: int, font: ImageFont.FreeTypeFont,
 
 
 def _draw_timed_block(draw: ImageDraw.ImageDraw, ev: CalEvent,
-                      x: int, y0: int, y1: int, w: int, fill: int) -> None:
+                      x: int, y0: int, y1: int, w: int, fill: int,
+                      text_pass: bool = False) -> None:
     """Draw a timed event block spanning y0→y1 with wrapped text."""
-    draw.rectangle([x, y0, x + w, y1], outline=fill)
-    draw.rectangle([x, y0, x + 3, y1], fill=fill)      # color bar on left
+    if not text_pass:
+        draw.rectangle([x, y0, x + w, y1], fill=WHITE, outline=fill)
+        draw.rectangle([x, y0, x + 3, y1], fill=fill)      # color bar on left
+        return
 
     block_h = y1 - y0
     if block_h < 12:
@@ -406,8 +439,8 @@ def _draw_timed_block(draw: ImageDraw.ImageDraw, ev: CalEvent,
     tx     = x + 5
     tw     = w - 9      # usable text width (past bar + right padding)
     ty     = y0 + 1
-    lh_sm  = 11         # FONT_TIME  (size 9)  line height
-    lh_ev  = 12         # FONT_EVENT (size 10) line height
+    lh_sm  = 12         # FONT_TIME  (size 10) line height
+    lh_ev  = 13         # FONT_EVENT (size 10 bold) line height
 
     # Line 1: time
     draw.text((tx, ty), ev.start.strftime("%H:%M"), font=FONT_TIME, fill=BLACK)
