@@ -8,8 +8,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /bin/uv
+COPY pyproject.toml uv.lock ./
+RUN uv export --no-dev --frozen | pip install --no-cache-dir -r /dev/stdin
 
 COPY *.py ./
 COPY templates/ ./templates/
