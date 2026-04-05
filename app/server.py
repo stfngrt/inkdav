@@ -25,11 +25,17 @@ from datetime import date, datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from zoneinfo import ZoneInfo
 
+import mimetypes
+from pathlib import Path
+
 import requests as _requests
 
 import config
 from caldav_client import CalEvent, fetch_range
 from flask import Flask, redirect, render_template, request, url_for
+from jinja2 import Environment, FileSystemLoader
+
+_jinja = Environment(loader=FileSystemLoader(Path(__file__).parent / "templates"), autoescape=True)
 from renderer import render_days
 
 logging.basicConfig(
@@ -212,6 +218,8 @@ class Handler(BaseHTTPRequestHandler):
             self._serve_health()
         elif path in ("/", "/debug"):
             self._serve_debug()
+        elif path.startswith("/static/"):
+            self._serve_static(path[len("/static/"):])
         else:
             self.send_error(404, "Not found")
 
@@ -241,26 +249,30 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _serve_static(self, filename: str):
+        static_dir = Path(__file__).parent / "static"
+        filepath = (static_dir / filename).resolve()
+        if not str(filepath).startswith(str(static_dir)):  # prevent path traversal
+            self.send_error(403, "Forbidden")
+            return
+        if not filepath.is_file():
+            self.send_error(404, "Not found")
+            return
+        mime, _ = mimetypes.guess_type(str(filepath))
+        data = filepath.read_bytes()
+        self.send_response(200)
+        self.send_header("Content-Type", mime or "application/octet-stream")
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "max-age=3600")
+        self.end_headers()
+        self.wfile.write(data)
+
     def _serve_debug(self):
-        today     = date.today()
-        this_week = _monday_of(today)
-        refresh_secs = config.refresh_seconds()
-        html = f"""<!doctype html><html><head><meta charset=utf-8>
-<title>Inkdav</title>
-<style>body{{font-family:sans-serif;padding:20px;background:#f5f5f5}}
-img{{border:2px solid #333;border-radius:4px;max-width:100%}}
-.meta{{font-size:13px;color:#555;margin:8px 0}}</style></head>
-<body>
-<h2>📅 Inkdav</h2>
-<p class=meta>Week: <strong>{this_week}</strong> · Refresh every {refresh_secs}s
-· <a href="http://localhost:5001">Admin GUI</a></p>
-<h3>Current week</h3>
-<img src="/week.png?t={int(time.time())}"><br>
-<h3>Next week</h3>
-<img src="/next.png?t={int(time.time())}">
-<p class=meta><a href="/health">health check</a></p>
-</body></html>"""
-        body = html.encode()
+        body = _jinja.get_template("debug.html").render(
+            this_week    = _monday_of(date.today()),
+            refresh_secs = config.refresh_seconds(),
+            ts           = int(time.time()),
+        ).encode()
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))

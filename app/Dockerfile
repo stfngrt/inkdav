@@ -14,6 +14,7 @@ RUN uv export --no-dev --frozen | pip install --no-cache-dir -r /dev/stdin
 
 COPY *.py ./
 COPY templates/ ./templates/
+COPY static/ ./static/
 
 EXPOSE 8080
 EXPOSE 5000

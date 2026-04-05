@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>inkdav</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; }
+    body   { font-family: system-ui, sans-serif; background: #f0f0f0; color: #222; margin: 0; padding: 20px; }
+    .site-header { display: flex; align-items: center; gap: 12px; margin-bottom: 18px; }
+    .site-header img { width: 48px; height: 48px; }
+    .site-header h1  { font-size: 1.3rem; margin: 0; }
+    .site-header .subtitle { font-size: 0.78rem; color: #888; margin: 2px 0 0; }
+    section { background: #fff; border: 1px solid #ddd; border-radius: 6px; padding: 16px; margin-bottom: 20px; }
+    h2     { font-size: 1rem; margin: 0 0 12px; border-bottom: 1px solid #ccc; padding-bottom: 4px; }
+    .meta  { font-size: 0.82rem; color: #666; margin: 0 0 10px; }
+    img.preview { max-width: 100%; border: 1px solid #ccc; border-radius: 4px; display: block; }
+    a      { color: #2563eb; }
+  </style>
+</head>
+<body>
+
+<header class="site-header">
+  <img src="/static/logo.png" alt="inkdav logo">
+  <div>
+    <h1>inkdav</h1>
+    <div class="subtitle">CalDAV &rarr; e&#8209;ink</div>
+  </div>
+</header>
+
+<section>
+  <h2>Current week</h2>
+  <p class="meta">
+    Week of <strong>{{ this_week }}</strong> &mdash; refreshes every {{ refresh_secs }}s
+    &mdash; <a href="/health">health</a>
+    &mdash; <a href="http://localhost:5001">Admin GUI</a>
+  </p>
+  <img class="preview" src="/week.png?t={{ ts }}" alt="Current week">
+</section>
+
+<section>
+  <h2>Next week</h2>
+  <img class="preview" src="/next.png?t={{ ts }}" alt="Next week">
+</section>
+
+</body>
+</html>
