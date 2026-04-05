@@ -253,7 +253,7 @@ img{{border:2px solid #333;border-radius:4px;max-width:100%}}
 <body>
 <h2>📅 Inkdav</h2>
 <p class=meta>Week: <strong>{this_week}</strong> · Refresh every {refresh_secs}s
-· <a href="http://localhost:5000">Admin GUI</a></p>
+· <a href="http://localhost:5001">Admin GUI</a></p>
 <h3>Current week</h3>
 <img src="/week.png?t={int(time.time())}"><br>
 <h3>Next week</h3>
