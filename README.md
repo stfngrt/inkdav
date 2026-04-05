@@ -1,6 +1,6 @@
 # Inkdav
 
-<img src="app/static/logo.png" alt="inkdav logo" width="120" align="right">
+<img src="app/static/logo.png" alt="inkdav logo" width="120" align="left">
 
 A self-hosted week calendar for [TRMNL](https://usetrmnl.com) e-ink displays. Fetches events from CalDAV (Nextcloud, iCloud, Fastmail, …), renders them as a 1-bit PNG week grid, and pushes the image to your TRMNL device every 15 minutes.
 
