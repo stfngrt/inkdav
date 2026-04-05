@@ -40,9 +40,13 @@ EVENT_MIN_H = 14   # minimum px height for a timed event block
 # ── Colors ────────────────────────────────────────────────────────────────────
 BLACK = 0
 WHITE = 255
-LGREY = 232   # today column highlight (used only when today_highlight is enabled)
-MGREY = 140   # grid lines, secondary text
-DGREY = 60    # header background
+LGREY = 235   # today column highlight (used only when today_highlight is enabled)
+MGREY = 130   # grid lines
+DGREY = 80    # header background
+
+# Greyscale fill levels assigned to calendars in order.
+# Spaced so each dithers to a visually distinct dot pattern on e-ink.
+_CAL_FILLS = [0, 80, 160, 220]   # black / dark / medium / light
 
 # ── Fonts ─────────────────────────────────────────────────────────────────────
 def _font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont:
@@ -63,17 +67,24 @@ FONT_LEGEND = _font(9)
 DAY_NAMES = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]
 
 
-# ── Color helpers ─────────────────────────────────────────────────────────────
-def _hex_to_grey(hex_color: str) -> int:
-    h = hex_color.lstrip("#")
-    r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
-    return int(0.299 * r + 0.587 * g + 0.114 * b)
+# ── Calendar fill map ─────────────────────────────────────────────────────────
 
-
-def _event_fill(grey: int) -> int:
-    if grey < 80:   return BLACK
-    if grey < 160:  return DGREY
-    return MGREY
+def _build_fill_map(
+    events_by_cal: dict[str, tuple[str, list[CalEvent]]],
+) -> dict[str, int]:
+    """
+    Assign each calendar a distinct greyscale fill level by its position in
+    events_by_cal.  The same color hex always maps to the same fill within a
+    render, so legend swatches, all-day bars, and timed event stripes are
+    consistent.
+    """
+    fills: dict[str, int] = {}
+    idx = 0
+    for _, (color, _) in events_by_cal.items():
+        if color not in fills:
+            fills[color] = _CAL_FILLS[idx % len(_CAL_FILLS)]
+            idx += 1
+    return fills
 
 
 # ── Layout ────────────────────────────────────────────────────────────────────
@@ -148,15 +159,16 @@ def _draw_legend(
     draw: ImageDraw.ImageDraw,
     layout: _Layout,
     events_by_cal: dict[str, tuple[str, list[CalEvent]]],
+    fill_map: dict[str, int],
 ) -> None:
-    draw.rectangle([0, HEADER_H, layout.width, HEADER_H + LEGEND_H - 1], fill=240)
+    draw.rectangle([0, HEADER_H, layout.width, HEADER_H + LEGEND_H - 1], fill=245)
     draw.line([0, HEADER_H + LEGEND_H - 1, layout.width, HEADER_H + LEGEND_H - 1],
               fill=MGREY, width=1)
     lx = TIME_AXIS_W + PADDING
     for cal_name, (color, _) in events_by_cal.items():
-        grey = _event_fill(_hex_to_grey(color))
+        fill = fill_map.get(color, BLACK)
         draw.rectangle([lx, HEADER_H + 3, lx + 10, HEADER_H + LEGEND_H - 4],
-                       fill=grey, outline=BLACK)
+                       fill=fill, outline=BLACK)
         lx += 14
         draw.text((lx, HEADER_H + 3), cal_name, font=FONT_LEGEND, fill=BLACK)
         lx += int(draw.textlength(cal_name, font=FONT_LEGEND)) + 14
@@ -234,6 +246,7 @@ def _draw_allday_strip(
     draw: ImageDraw.ImageDraw,
     layout: _Layout,
     allday_assignments: list[tuple[CalEvent, int, int, int]],
+    fill_map: dict[str, int],
 ) -> None:
     strip_h = layout.allday_rows * ALLDAY_ROW_H
     draw.line([TIME_AXIS_W - 1, layout.allday_top, TIME_AXIS_W - 1, layout.height],
@@ -246,11 +259,12 @@ def _draw_allday_strip(
         y1   = y0 + ALLDAY_ROW_H - 2
         x0   = TIME_AXIS_W + first_col * layout.col_w + PADDING
         x1   = TIME_AXIS_W + (last_col + 1) * layout.col_w - PADDING
-        grey = _event_fill(_hex_to_grey(ev.color))
-        draw.rectangle([x0, y0, x1, y1], fill=grey, outline=BLACK)
-        lbl = _truncate(ev.summary, x1 - x0 - 4, FONT_EVENT, draw)
-        draw.text((x0 + 2, y0 + 2), lbl, font=FONT_EVENT,
-                  fill=WHITE if grey < 128 else BLACK)
+        fill = fill_map.get(ev.color, BLACK)
+        # Stripe style: outline + left color bar (consistent with timed events)
+        draw.rectangle([x0, y0, x1, y1], outline=BLACK)
+        draw.rectangle([x0, y0, x0 + 3, y1], fill=fill)
+        lbl = _truncate(ev.summary, x1 - x0 - 6, FONT_EVENT, draw)
+        draw.text((x0 + 6, y0 + 2), lbl, font=FONT_EVENT, fill=BLACK)
 
 
 def _draw_time_axis(draw: ImageDraw.ImageDraw, layout: _Layout) -> None:
@@ -259,7 +273,7 @@ def _draw_time_axis(draw: ImageDraw.ImageDraw, layout: _Layout) -> None:
         if y >= layout.height:
             break
         draw.line([TIME_AXIS_W, y, layout.width, y], fill=MGREY, width=1)
-        draw.text((1, y - 9), f"{h:02d}", font=FONT_TIME, fill=MGREY)
+        draw.text((1, y - 9), f"{h:02d}", font=FONT_TIME, fill=BLACK)
 
 
 def _draw_now_indicator(
@@ -286,6 +300,7 @@ def _draw_timed_events(
     draw: ImageDraw.ImageDraw,
     layout: _Layout,
     day_events: dict[int, list[CalEvent]],
+    fill_map: dict[str, int],
 ) -> None:
     for col, evs in day_events.items():
         timed_evs = sorted(evs, key=lambda e: e.start)
@@ -302,7 +317,7 @@ def _draw_timed_events(
             y1 = layout.grid_top + int((vis_end   - layout.time_start_hour) * layout.px_per_hour) - 1
             if y1 - y0 < EVENT_MIN_H:
                 y1 = y0 + EVENT_MIN_H
-            _draw_timed_block(draw, ev, x0, y0, y1, cw, _event_fill(_hex_to_grey(ev.color)))
+            _draw_timed_block(draw, ev, x0, y0, y1, cw, fill_map.get(ev.color, BLACK))
 
 
 # ── Core renderer ─────────────────────────────────────────────────────────────
@@ -330,6 +345,7 @@ def render_days(
         time_start_hour:    First visible hour (0–23).
         today_highlight:    Shade today's column.
     """
+    fill_map            = _build_fill_map(events_by_cal)
     timed_events, allday_events = _collect_day_events(days, events_by_cal)
     allday_assignments  = _assign_allday_rows(allday_events, days)
     used_rows           = max((r for _, _, _, r in allday_assignments), default=-1) + 1
@@ -343,11 +359,11 @@ def render_days(
     draw = ImageDraw.Draw(img)
 
     _draw_header(draw, layout, days, today)
-    _draw_legend(draw, layout, events_by_cal)
-    _draw_allday_strip(draw, layout, allday_assignments)
+    _draw_legend(draw, layout, events_by_cal, fill_map)
+    _draw_allday_strip(draw, layout, allday_assignments, fill_map)
     _draw_time_axis(draw, layout)
     _draw_now_indicator(draw, layout, days, today)
-    _draw_timed_events(draw, layout, timed_events)
+    _draw_timed_events(draw, layout, timed_events, fill_map)
 
     return img.convert("1", dither=Image.Dither.FLOYDSTEINBERG).convert("L")
 
@@ -410,7 +426,7 @@ def _draw_timed_block(draw: ImageDraw.ImageDraw, ev: CalEvent,
     block_h = y1 - y0
     if block_h >= 14:
         time_str = ev.start.strftime("%H:%M")
-        draw.text((x + 5, y0 + 1), time_str, font=FONT_TIME, fill=MGREY)
+        draw.text((x + 5, y0 + 1), time_str, font=FONT_TIME, fill=BLACK)
         time_w  = int(draw.textlength(time_str, font=FONT_TIME)) + 6
         label   = _truncate(ev.summary, w - time_w - 4, FONT_EVENT, draw)
         draw.text((x + 5 + time_w, y0 + 1), label, font=FONT_EVENT, fill=BLACK)
