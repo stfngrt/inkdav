@@ -136,6 +136,7 @@ _DEFAULTS: dict = {
     "time_start_mode":   "auto",
     "time_start_hour":   8,
     "today_highlight":   False,
+    "view_mode":         "week",
 }
 
 
@@ -158,6 +159,7 @@ def _from_env() -> dict:
         "time_start_mode":  "auto",
         "time_start_hour":  8,
         "today_highlight":  False,
+        "view_mode":        "week",
     }
 
 

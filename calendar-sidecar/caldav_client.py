@@ -23,6 +23,43 @@ class CalEvent:
     color:    str               # hex color string
 
 
+def fetch_range(
+    url:        str,
+    user:       str,
+    password:   str,
+    cal_name:   str,
+    color:      str,
+    start:      date,
+    end:        date,           # exclusive end date
+    local_tz:   ZoneInfo = ZoneInfo("Europe/Berlin"),
+) -> list[CalEvent]:
+    """
+    Fetch all events in [start, end) from one CalDAV calendar.
+    Returns a list of CalEvent, sorted by start time.
+    """
+    client   = caldav.DAVClient(url=url, username=user, password=password)
+    calendar = client.calendar(url=url)
+
+    # expand=True asks the server to expand recurring events in the range
+    dav_events = calendar.search(
+        start=datetime(start.year, start.month, start.day),
+        end=datetime(end.year,   end.month,   end.day),
+        event=True,
+        expand=True,
+    )
+
+    events: list[CalEvent] = []
+    for dav_event in dav_events:
+        cal: Calendar = Calendar.from_ical(dav_event.data)
+        for component in cal.walk("VEVENT"):
+            ev = _component_to_event(component, cal_name, color, start, end, local_tz)
+            if ev:
+                events.append(ev)
+
+    events.sort(key=lambda e: e.start)
+    return events
+
+
 def fetch_week(
     url:        str,
     user:       str,
@@ -32,33 +69,9 @@ def fetch_week(
     week_start: date,           # Monday of the target week
     local_tz:   ZoneInfo = ZoneInfo("Europe/Berlin"),
 ) -> list[CalEvent]:
-    """
-    Fetch all events for the given Monday→Sunday week from one CalDAV calendar.
-    Returns a list of CalEvent, sorted by start time.
-    """
-    week_end = week_start + timedelta(days=7)
-
-    client   = caldav.DAVClient(url=url, username=user, password=password)
-    calendar = client.calendar(url=url)
-
-    # expand=True asks the server to expand recurring events in the range
-    dav_events = calendar.search(
-        start=datetime(week_start.year, week_start.month, week_start.day),
-        end=datetime(week_end.year, week_end.month, week_end.day),
-        event=True,
-        expand=True,
-    )
-
-    events: list[CalEvent] = []
-    for dav_event in dav_events:
-        cal: Calendar = Calendar.from_ical(dav_event.data)
-        for component in cal.walk("VEVENT"):
-            ev = _component_to_event(component, cal_name, color, week_start, week_end, local_tz)
-            if ev:
-                events.append(ev)
-
-    events.sort(key=lambda e: e.start)
-    return events
+    """Fetch all events for the given Monday→Sunday week. Convenience wrapper."""
+    return fetch_range(url, user, password, cal_name, color,
+                       week_start, week_start + timedelta(days=7), local_tz)
 
 
 def _component_to_event(
@@ -93,9 +106,10 @@ def _component_to_event(
     else:
         end = start + timedelta(hours=1)
 
-    # Filter: only keep events that actually overlap this week
-    ev_date = start.date()
-    if ev_date >= week_end or ev_date < week_start:
+    # Filter: keep events that actually overlap [week_start, week_end)
+    # Use end.date() for overlap so multi-day all-day events starting before
+    # the window are still included.
+    if start.date() >= week_end or end.date() <= week_start:
         return None
 
     return CalEvent(
