@@ -131,12 +131,13 @@ def webhooks() -> list[dict]:
 # Keys that may be absent in config files created by older versions.
 # Applied automatically when loading from disk.
 _DEFAULTS: dict = {
-    "webhooks":          [],
-    "time_window_hours": 12,
-    "time_start_mode":   "auto",
-    "time_start_hour":   8,
-    "today_highlight":   False,
-    "view_mode":         "week",
+    "webhooks":           [],
+    "time_window_hours":  12,
+    "time_start_mode":    "auto",
+    "time_start_hour":    8,
+    "today_highlight":    False,
+    "view_mode":          "week",
+    "hyphenation_lang":   "de_DE",
 }
 
 
@@ -158,8 +159,9 @@ def _from_env() -> dict:
         "time_window_hours": 12,
         "time_start_mode":  "auto",
         "time_start_hour":  8,
-        "today_highlight":  False,
-        "view_mode":        "week",
+        "today_highlight":   False,
+        "view_mode":         "week",
+        "hyphenation_lang":  "de_DE",
     }
 
 
