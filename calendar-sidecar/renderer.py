@@ -292,8 +292,37 @@ def _draw_now_indicator(
         return
     ny  = layout.grid_top + int((now_frac - layout.time_start_hour) * layout.px_per_hour)
     tx0 = TIME_AXIS_W + col * layout.col_w
-    draw.line([tx0, ny, tx0 + layout.col_w, ny], fill=BLACK, width=2)
-    draw.ellipse([tx0 - 3, ny - 3, tx0 + 3, ny + 3], fill=BLACK)
+    tx1 = tx0 + layout.col_w
+    # Dot sits on the time axis so it's never covered by an event block;
+    # line starts from the dot and runs across the today column.
+    draw.ellipse([TIME_AXIS_W - 5, ny - 3, TIME_AXIS_W + 1, ny + 3], fill=BLACK)
+    draw.line([tx0, ny, tx1, ny], fill=BLACK, width=2)
+
+
+def _assign_lanes(
+    evs: list[CalEvent],
+) -> list[tuple[CalEvent, int, int]]:
+    """
+    Greedy lane assignment so overlapping events share the column width.
+
+    Returns list of (event, lane_index, total_lanes) sorted by start time.
+    """
+    sorted_evs = sorted(evs, key=lambda e: e.start)
+    lane_end: list[datetime] = []
+    ev_lanes: list[int]      = []
+    for ev in sorted_evs:
+        placed = False
+        for i, end in enumerate(lane_end):
+            if ev.start >= end:
+                lane_end[i] = ev.end
+                ev_lanes.append(i)
+                placed = True
+                break
+        if not placed:
+            ev_lanes.append(len(lane_end))
+            lane_end.append(ev.end)
+    num_lanes = len(lane_end)
+    return [(ev, lane, num_lanes) for ev, lane in zip(sorted_evs, ev_lanes)]
 
 
 def _draw_timed_events(
@@ -303,10 +332,11 @@ def _draw_timed_events(
     fill_map: dict[str, int],
 ) -> None:
     for col, evs in day_events.items():
-        timed_evs = sorted(evs, key=lambda e: e.start)
-        x0 = TIME_AXIS_W + col * layout.col_w + PADDING
-        cw = layout.col_w - PADDING * 2
-        for ev in timed_evs:
+        col_x0 = TIME_AXIS_W + col * layout.col_w + PADDING
+        col_w  = layout.col_w - PADDING * 2
+        for ev, lane, num_lanes in _assign_lanes(evs):
+            lw         = col_w // num_lanes
+            x0         = col_x0 + lane * lw
             start_frac = ev.start.hour + ev.start.minute / 60
             end_frac   = ev.end.hour   + ev.end.minute   / 60
             vis_start  = max(start_frac, layout.time_start_hour)
@@ -317,7 +347,7 @@ def _draw_timed_events(
             y1 = layout.grid_top + int((vis_end   - layout.time_start_hour) * layout.px_per_hour) - 1
             if y1 - y0 < EVENT_MIN_H:
                 y1 = y0 + EVENT_MIN_H
-            _draw_timed_block(draw, ev, x0, y0, y1, cw, fill_map.get(ev.color, BLACK))
+            _draw_timed_block(draw, ev, x0, y0, y1, lw, fill_map.get(ev.color, BLACK))
 
 
 # ── Core renderer ─────────────────────────────────────────────────────────────
@@ -362,8 +392,8 @@ def render_days(
     _draw_legend(draw, layout, events_by_cal, fill_map)
     _draw_allday_strip(draw, layout, allday_assignments, fill_map)
     _draw_time_axis(draw, layout)
-    _draw_now_indicator(draw, layout, days, today)
-    _draw_timed_events(draw, layout, timed_events, fill_map)
+    _draw_now_indicator(draw, layout, days, today)   # drawn before events
+    _draw_timed_events(draw, layout, timed_events, fill_map)  # events on top
 
     return img.convert("1", dither=Image.Dither.FLOYDSTEINBERG).convert("L")
 
@@ -417,22 +447,53 @@ def render_3day(
 
 # ── Event block renderer ──────────────────────────────────────────────────────
 
+def _wrap_text(text: str, max_px: int, font: ImageFont.FreeTypeFont,
+               draw: ImageDraw.ImageDraw) -> list[str]:
+    """Split text into lines that each fit within max_px."""
+    words = text.split()
+    if not words:
+        return []
+    lines: list[str] = []
+    current = words[0]
+    for word in words[1:]:
+        candidate = current + " " + word
+        if draw.textlength(candidate, font=font) <= max_px:
+            current = candidate
+        else:
+            lines.append(current)
+            current = word
+    lines.append(current)
+    return lines
+
+
 def _draw_timed_block(draw: ImageDraw.ImageDraw, ev: CalEvent,
                       x: int, y0: int, y1: int, w: int, fill: int) -> None:
-    """Draw a timed event block spanning y0→y1."""
+    """Draw a timed event block spanning y0→y1 with wrapped text."""
     draw.rectangle([x, y0, x + w, y1], outline=fill)
     draw.rectangle([x, y0, x + 3, y1], fill=fill)      # color bar on left
 
     block_h = y1 - y0
-    if block_h >= 14:
-        time_str = ev.start.strftime("%H:%M")
-        draw.text((x + 5, y0 + 1), time_str, font=FONT_TIME, fill=BLACK)
-        time_w  = int(draw.textlength(time_str, font=FONT_TIME)) + 6
-        label   = _truncate(ev.summary, w - time_w - 4, FONT_EVENT, draw)
-        draw.text((x + 5 + time_w, y0 + 1), label, font=FONT_EVENT, fill=BLACK)
-    else:
-        label = _truncate(ev.summary, w - 6, FONT_EVENT, draw)
-        draw.text((x + 5, y0 + 1), label, font=FONT_EVENT, fill=BLACK)
+    if block_h < 12:
+        return
+
+    tx     = x + 5
+    tw     = w - 9      # usable text width (past bar + right padding)
+    ty     = y0 + 1
+    lh_sm  = 11         # FONT_TIME  (size 9)  line height
+    lh_ev  = 12         # FONT_EVENT (size 10) line height
+
+    # Line 1: time
+    draw.text((tx, ty), ev.start.strftime("%H:%M"), font=FONT_TIME, fill=BLACK)
+    ty += lh_sm
+
+    # Remaining lines: word-wrapped summary
+    for line in _wrap_text(ev.summary, tw, FONT_EVENT, draw):
+        if ty + lh_ev > y1:                      # last pixel row — truncate
+            draw.text((tx, ty), _truncate(line, tw, FONT_EVENT, draw),
+                      font=FONT_EVENT, fill=BLACK)
+            break
+        draw.text((tx, ty), line, font=FONT_EVENT, fill=BLACK)
+        ty += lh_ev
 
 
 def _truncate(text: str, max_px: int, font: ImageFont.FreeTypeFont,
