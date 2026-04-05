@@ -1,15 +1,15 @@
-# TRMNL Week Calendar
+# Inkdav
 
 A self-hosted week calendar for [TRMNL](https://usetrmnl.com) e-ink displays. Fetches events from CalDAV (Nextcloud, iCloud, Fastmail, …), renders them as a 1-bit PNG week grid, and pushes the image to your TRMNL device every 15 minutes.
 
-![Preview](calendar-sidecar/preview.png)
+![Preview](app/preview.png)
 
 ---
 
 ## How it works
 
 ```
-CalDAV calendars          calendar sidecar
+CalDAV calendars          Inkdav
   (Nextcloud, etc.)  ───►  fetches & renders
                            every 15 minutes
                                 │
@@ -21,7 +21,7 @@ CalDAV calendars          calendar sidecar
 
 Two Docker containers run side by side:
 - **BYOS** (`larapaper`) — the TRMNL server your device connects to
-- **Calendar sidecar** — fetches CalDAV, renders the PNG, and pushes it to BYOS
+- **Inkdav** — fetches CalDAV, renders the PNG, and pushes it to BYOS
 
 ---
 
@@ -38,8 +38,8 @@ Two Docker containers run side by side:
 ### 1. Clone & configure
 
 ```bash
-git clone https://github.com/stfngrt/trmnl-week-calendar.git
-cd trmnl-week-calendar
+git clone https://github.com/stfngrt/inkdav.git
+cd inkdav
 cp .env.example .env
 ```
 
@@ -59,7 +59,7 @@ docker compose up -d
 | What | URL |
 |------|-----|
 | BYOS dashboard | http://localhost:4567 |
-| Calendar admin UI | http://localhost:5001 |
+| Inkdav admin UI | http://localhost:5001 |
 | Rendered PNG (current week) | http://localhost:8080/week.png |
 | Health check | http://localhost:8080/health |
 
@@ -99,7 +99,7 @@ curl -u "alice:APP-PASSWORD" \
    `http://localhost:4567/api/plugin_settings/<uuid>/image`
 4. Go to **Devices → your device → Playlist** and add the plugin
 
-### 5. Connect the sidecar to BYOS
+### 5. Connect Inkdav to BYOS
 
 Open **http://localhost:5001**, go to **Webhooks**, and add:
 
@@ -109,12 +109,12 @@ Open **http://localhost:5001**, go to **Webhooks**, and add:
 | Webhook URL | `http://trmnl-byos:8080/api/plugin_settings/<uuid>/image` |
 
 > **Important:** use `http://trmnl-byos:8080` (Docker container name + internal port), **not** `http://localhost:4567`.
-> The two containers share a Docker bridge network, so `trmnl-byos` resolves correctly from inside the sidecar. `localhost:4567` is the host-side port and is unreachable from within Docker.
+> The two containers share a Docker bridge network, so `trmnl-byos` resolves correctly from inside Inkdav. `localhost:4567` is the host-side port and is unreachable from within Docker.
 
 Click **Trigger refresh** to send the first image. Confirm it worked:
 
 ```bash
-docker compose logs calendar --tail=20
+docker compose logs inkdav --tail=20
 # You should see:  Webhook [BYOS] → HTTP 200
 ```
 
@@ -122,7 +122,7 @@ docker compose logs calendar --tail=20
 
 ## Configuration
 
-Everything is managed through the admin UI at **http://localhost:5001** and stored in a Docker volume (`calendar_config`). No need to edit `.env` after initial setup.
+Everything is managed through the admin UI at **http://localhost:5001** and stored in a Docker volume (`inkdav_data`). No need to edit `.env` after initial setup.
 
 The following environment variables only apply on **first run** (before `config.json` exists):
 
@@ -139,7 +139,7 @@ The following environment variables only apply on **first run** (before `config.
 
 | Symptom | Fix |
 |---------|-----|
-| No events shown in PNG | Check `/health` and `docker compose logs calendar` |
+| No events shown in PNG | Check `/health` and `docker compose logs inkdav` |
 | `Webhook failed: Connection refused` | Webhook URL uses `localhost` — change to `http://trmnl-byos:8080/...` |
 | `Webhook failed: 400 Bad Request` | Plugin type in BYOS is not **Image Webhook** — recreate the plugin |
 | `Webhook failed: 404 Not Found` | Wrong UUID in the webhook URL — copy it from the BYOS plugin page |
@@ -147,17 +147,17 @@ The following environment variables only apply on **first run** (before `config.
 | 401 from CalDAV | Wrong app password — create a new one in Nextcloud → Settings → Security |
 | 404 from CalDAV | Wrong calendar URL — use the `curl PROPFIND` command above to list slugs |
 | Wrong timezone | Change in admin UI → Settings → Timezone |
-| Config lost after restart | Never run `docker compose down -v` — it deletes the `calendar_config` volume. `docker compose down` is safe. |
+| Config lost after restart | Never run `docker compose down -v` — it deletes the `inkdav_data` volume. `docker compose down` is safe. |
 
 ---
 
 ## Project layout
 
 ```
-trmnl-week-calendar/
+inkdav/
 ├── docker-compose.yml
 ├── .env.example
-└── calendar-sidecar/
+└── app/
     ├── Dockerfile
     ├── config.py          # persistent config (JSON + env bootstrap)
     ├── caldav_client.py   # CalDAV fetcher

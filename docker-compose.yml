@@ -24,10 +24,10 @@ services:
   # Fetches N CalDAV calendars, renders a week-grid PNG, serves it on :8080.
   # After each refresh it POSTs to any configured webhook URLs (e.g. BYOS).
   # Admin UI: http://localhost:5000
-  calendar:
+  inkdav:
     build:
-      context: ./calendar-sidecar
-    container_name: trmnl-calendar
+      context: ./app
+    container_name: inkdav
     restart: unless-stopped
     ports:
       - "8080:8080"        # PNG server (BYOS / debugging)
@@ -38,13 +38,13 @@ services:
       RENDER_HEIGHT: "480"
       REFRESH_SECONDS: "900"
     volumes:
-      - calendar_config:/app/data   # persists config.json across restarts
+      - inkdav_data:/app/data   # persists config.json across restarts
     networks:
       - trmnl_net
 
 volumes:
   byos_data:
-  calendar_config:
+  inkdav_data:
 
 networks:
   trmnl_net:

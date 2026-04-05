@@ -246,12 +246,12 @@ class Handler(BaseHTTPRequestHandler):
         this_week = _monday_of(today)
         refresh_secs = config.refresh_seconds()
         html = f"""<!doctype html><html><head><meta charset=utf-8>
-<title>TRMNL Week Calendar</title>
+<title>Inkdav</title>
 <style>body{{font-family:sans-serif;padding:20px;background:#f5f5f5}}
 img{{border:2px solid #333;border-radius:4px;max-width:100%}}
 .meta{{font-size:13px;color:#555;margin:8px 0}}</style></head>
 <body>
-<h2>📅 TRMNL Week Calendar</h2>
+<h2>📅 Inkdav</h2>
 <p class=meta>Week: <strong>{this_week}</strong> · Refresh every {refresh_secs}s
 · <a href="http://localhost:5000">Admin GUI</a></p>
 <h3>Current week</h3>
