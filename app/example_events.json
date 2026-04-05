@@ -4,6 +4,12 @@
     "color": "#000000",
     "events": [
       {
+        "summary": "Konferenz",
+        "start":   "2026-04-06",
+        "end":     "2026-04-09",
+        "all_day": true
+      },
+      {
         "summary": "Team stand-up",
         "start": "2026-04-07T09:00:00+02:00",
         "end":   "2026-04-07T09:30:00+02:00"
@@ -47,6 +53,13 @@
       {
         "summary": "Geburtstag Mama",
         "start":   "2026-04-06",
+        "end":     "2026-04-07",
+        "all_day": true
+      },
+      {
+        "summary": "Ostern",
+        "start":   "2026-04-10",
+        "end":     "2026-04-11",
         "all_day": true
       },
       {

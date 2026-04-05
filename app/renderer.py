@@ -164,7 +164,7 @@ def _draw_header(
     text_pass: bool = False,
 ) -> None:
     if not text_pass:
-        draw.rectangle([0, 0, layout.width, HEADER_H - 1], fill=DGREY)
+        draw.rectangle([0, 0, layout.width, HEADER_H - 1], fill=BLACK)
         for col, day in enumerate(days):
             x0 = TIME_AXIS_W + col * layout.col_w
             x1 = x0 + layout.col_w - 1
