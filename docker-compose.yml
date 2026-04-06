@@ -27,6 +27,7 @@ services:
   inkdav:
     build:
       context: ./app
+      target: runtime
     container_name: inkdav
     restart: unless-stopped
     ports:
