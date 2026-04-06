@@ -9,6 +9,7 @@ dependencies = [
     "Flask==3.0.3",
     "requests==2.32.3",
     "pyphen>=0.17.2",
+    "weasyprint>=68.0",
 ]
 
 [dependency-groups]
