@@ -1,4 +1,4 @@
-FROM python:3.12-slim
+FROM python:3.12-slim AS base
 
 # WeasyPrint needs Pango/Cairo for layout and font rendering
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -15,6 +15,10 @@ WORKDIR /app
 
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /bin/uv
 COPY pyproject.toml uv.lock ./
+
+
+FROM base AS runtime
+
 RUN uv export --no-dev --frozen | pip install --no-cache-dir -r /dev/stdin
 
 COPY *.py ./
@@ -25,3 +29,12 @@ EXPOSE 8080
 EXPOSE 5000
 
 CMD ["python", "server.py"]
+
+
+FROM base AS test
+
+RUN uv export --frozen | pip install --no-cache-dir -r /dev/stdin
+
+COPY . .
+
+CMD ["python", "-m", "pytest"]
