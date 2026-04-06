@@ -14,9 +14,6 @@ Public API is identical to renderer.py.
 from __future__ import annotations
 
 import dataclasses
-import os
-import subprocess
-import tempfile
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
@@ -325,26 +322,12 @@ def _build_context(
 
 def _weasy_to_pil(html: str, width: int, height: int) -> Image.Image:
     import weasyprint
+    import pypdfium2
 
     pdf_bytes = weasyprint.HTML(string=html, base_url=str(_TEMPLATE_DIR)).write_pdf()
-
-    with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as f:
-        f.write(pdf_bytes)
-        pdf_path = f.name
-
-    png_base = pdf_path[:-4]
-    png_path = png_base + ".png"
-    try:
-        subprocess.run(
-            ["pdftoppm", "-r", "96", "-png", "-singlefile", pdf_path, png_base],
-            check=True,
-            capture_output=True,
-        )
-        return Image.open(png_path).copy()
-    finally:
-        for p in (pdf_path, png_path):
-            if os.path.exists(p):
-                os.unlink(p)
+    pdf = pypdfium2.PdfDocument(pdf_bytes)
+    bitmap = pdf[0].render(scale=96 / 72)
+    return bitmap.to_pil()
 
 
 # ── Core renderer ─────────────────────────────────────────────────────────────
