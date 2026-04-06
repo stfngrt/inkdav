@@ -118,7 +118,7 @@ body {
               width:{{ ev.width }}px;height:{{ ev.height }}px;
               background:white;border:1px solid {{ ev.fill_css }};overflow:hidden;">
     <div style="position:absolute;left:0;top:0;width:3px;height:100%;background:{{ ev.fill_css }};"></div>
-    <div style="position:absolute;left:5px;top:1px;right:2px;font-size:{{ event_font_size }}px;overflow:hidden;">
+    <div style="margin-left:5px;margin-top:1px;margin-right:2px;height:{{ ev.height - 3 }}px;font-size:{{ event_font_size }}px;overflow:hidden;">
       {% if ev.short %}
         <span style="display:block;font-weight:{{ event_bold_css }};white-space:nowrap;
                      overflow:hidden;text-overflow:ellipsis;">{{ ev.summary }}</span>

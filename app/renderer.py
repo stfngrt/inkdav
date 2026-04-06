@@ -18,7 +18,9 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 
 import jinja2
-from PIL import Image
+import pypdfium2
+import weasyprint
+from PIL import Image, ImageDraw, ImageFont
 
 from caldav_client import CalEvent
 from scheduling import (
@@ -149,16 +151,11 @@ def _font_src(bold: bool = False) -> str:
 
 def _measure_text(text: str, size: int = 10, bold: bool = False) -> int:
     """Pixel width of text using Pillow (matches renderer.py legend layout)."""
-    try:
-        from PIL import ImageDraw, ImageFont
-        from PIL import Image as _Image
-        p = _font_path(bold=bold)
-        font = ImageFont.truetype(p, size) if p else ImageFont.load_default()
-        _img  = _Image.new("L", (1, 1))
-        _draw = ImageDraw.Draw(_img)
-        return int(_draw.textlength(text, font=font))
-    except Exception:
-        return len(text) * 6
+    p = _font_path(bold=bold)
+    font = ImageFont.truetype(p, size) if p else ImageFont.load_default()
+    img  = Image.new("L", (1, 1))
+    draw = ImageDraw.Draw(img)
+    return int(draw.textlength(text, font=font))
 
 
 # ── Template context builder ──────────────────────────────────────────────────
@@ -172,7 +169,7 @@ def _build_context(
     timed_events: dict[int, list[CalEvent]],
     allday_assignments: list[tuple[CalEvent, int, int, int]],
     event_font_size: int = 10,
-    event_bold: bool = True,
+    event_bold: bool = False,
 ) -> dict:
     W = layout.width
     H = layout.height
@@ -263,15 +260,14 @@ def _build_context(
             vis_end    = min(end_frac,   layout.time_end_hour)
             if vis_end <= vis_start:
                 continue
-            y0      = layout.grid_top + int((vis_start - layout.time_start_hour) * layout.px_per_hour)
-            y1      = layout.grid_top + int((vis_end   - layout.time_start_hour) * layout.px_per_hour) - 1
-            if y1 - y0 < EVENT_MIN_H:
-                y1 = y0 + EVENT_MIN_H
-            block_h = y1 - y0
+            y0         = layout.grid_top + int((vis_start - layout.time_start_hour) * layout.px_per_hour) + 1
+            y1_natural = layout.grid_top + int((vis_end   - layout.time_start_hour) * layout.px_per_hour) - 2
+            y1         = max(y1_natural, y0 + EVENT_MIN_H)
+            block_h    = y1 - y0
             if block_h < 12:
                 continue
 
-            short    = (ev.end - ev.start).total_seconds() <= 1800
+            short    = block_h < (event_font_size * 2 + 4)
             fill_css = _grey_css(fill_map.get(ev.color, BLACK))
             timed_ctx.append({
                 "x0":       x0,
@@ -321,9 +317,6 @@ def _build_context(
 # ── WeasyPrint → PIL ──────────────────────────────────────────────────────────
 
 def _weasy_to_pil(html: str, width: int, height: int) -> Image.Image:
-    import weasyprint
-    import pypdfium2
-
     pdf_bytes = weasyprint.HTML(string=html, base_url=str(_TEMPLATE_DIR)).write_pdf()
     pdf = pypdfium2.PdfDocument(pdf_bytes)
     bitmap = pdf[0].render(scale=96 / 72)
@@ -341,7 +334,7 @@ def render_days(
     time_start_hour: int = 8,
     today_highlight: bool = False,
     event_font_size: int = 10,
-    event_bold: bool = True,
+    event_bold: bool = False,
 ) -> Image.Image:
     """
     Render a calendar image using WeasyPrint (HTML/CSS → PDF → PNG → 1-bit).
