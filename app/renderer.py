@@ -1,30 +1,27 @@
 """
-renderer.py
-===========
-Renders a day-column calendar grid as a 1-bit PNG optimised for e-ink displays.
+renderer_weasy.py
+=================
+WeasyPrint-based renderer.
 
-Layout (top → bottom):
-  - Header row:    dark bar with day name + date per column
-  - Legend row:    calendar color swatches + names
-  - All-day strip: one-line banner per day for DATE-only events
-  - Time grid:     timed events positioned on a proportional hour axis;
-                   window start and span are configurable
+Pipeline:
+  Python computes layout geometry → Jinja2 renders calendar_weasy.html
+  → WeasyPrint PDF → pdftoppm -r 96 → PIL RGB
+  → greyscale → Floyd-Steinberg 1-bit → L mode
 
-Public API
-----------
-render_days(days, events_by_cal, ...)   – core: render any list of dates
-render_week(events_by_cal, week_start, ...)  – 7-day Mon–Sun view
+Public API is identical to renderer.py.
 """
 
 from __future__ import annotations
 
 import dataclasses
+import os
+import subprocess
+import tempfile
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
-import pyphen
-
-from PIL import Image, ImageDraw, ImageFont
+import jinja2
+from PIL import Image
 
 from caldav_client import CalEvent
 from scheduling import (
@@ -34,73 +31,52 @@ from scheduling import (
     _collect_day_events,
 )
 
-# ── Fixed layout constants ────────────────────────────────────────────────────
-HEADER_H        = 28   # day-name + date row
-LEGEND_H        = 18   # calendar legend row
-BODY_TOP        = HEADER_H + LEGEND_H
-ALLDAY_ROW_H    = 18   # height of one all-day event row
-TIME_AXIS_W     = 28   # width of left-side hour-label column
-
-PADDING     = 2    # inner cell padding
-EVENT_MIN_H = 14   # minimum px height for a timed event block
+# ── Fixed layout constants (must match renderer.py) ───────────────────────────
+HEADER_H     = 28
+LEGEND_H     = 18
+BODY_TOP     = HEADER_H + LEGEND_H
+ALLDAY_ROW_H = 18
+TIME_AXIS_W  = 28
+PADDING      = 2
+EVENT_MIN_H  = 14
 
 # ── Colors ────────────────────────────────────────────────────────────────────
 BLACK = 0
 WHITE = 255
-LGREY = 235   # today column highlight (used only when today_highlight is enabled)
-MGREY = 130   # grid lines
-DGREY = 80    # header background
+LGREY = 235
+MGREY = 130
+DGREY = 80
 
-# Greyscale fill levels assigned to calendars in order.
-# Spaced so each dithers to a visually distinct dot pattern on e-ink.
-_CAL_FILLS = [0, 80, 160, 220]   # black / dark / medium / light
-
-
-def _hex_to_grey(hex_color: str) -> int:
-    """Convert a hex color string to 0–255 greyscale via luminance."""
-    h = hex_color.lstrip("#")
-    r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
-    return round(0.299 * r + 0.587 * g + 0.114 * b)
-
-
-def _event_fill(grey: int) -> int:
-    """Map a 0–255 greyscale value to a discrete fill level for e-ink rendering."""
-    if grey < 80:
-        return BLACK
-    if grey < 160:
-        return DGREY
-    return MGREY
-
-# ── Fonts ─────────────────────────────────────────────────────────────────────
-def _font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont:
-    candidates = [
-        f"/usr/share/fonts/truetype/dejavu/DejaVuSans{'-Bold' if bold else ''}.ttf",
-        f"/usr/share/fonts/dejavu/DejaVuSans{'-Bold' if bold else ''}.ttf",
-    ]
-    for path in candidates:
-        if Path(path).exists():
-            return ImageFont.truetype(path, size)
-    return ImageFont.load_default()
-
-FONT_DAY    = _font(12, bold=True)
-FONT_EVENT  = _font(10, bold=True)
-FONT_TIME   = _font(10)
-FONT_LEGEND = _font(10)
+_CAL_FILLS = [0, 80, 160, 220]
 
 DAY_NAMES = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]
 
+# ── Jinja2 environment ────────────────────────────────────────────────────────
+_TEMPLATE_DIR = Path(__file__).parent / "templates"
+_jinja_env = jinja2.Environment(
+    loader=jinja2.FileSystemLoader(str(_TEMPLATE_DIR)),
+    autoescape=True,
+)
 
-# ── Calendar fill map ─────────────────────────────────────────────────────────
+# ── Hyphenation (module-level, mirrors renderer.py interface) ─────────────────
+_hyphenation_lang: str = "de_DE"
+
+
+def set_hyphenation_lang(lang: str) -> None:
+    global _hyphenation_lang
+    _hyphenation_lang = lang
+
+
+# ── Color helpers ─────────────────────────────────────────────────────────────
+
+def _grey_css(v: int) -> str:
+    h = format(v, "02x")
+    return f"#{h}{h}{h}"
+
 
 def _build_fill_map(
     events_by_cal: dict[str, tuple[str, list[CalEvent]]],
 ) -> dict[str, int]:
-    """
-    Assign each calendar a distinct greyscale fill level by its position in
-    events_by_cal.  The same color hex always maps to the same fill within a
-    render, so legend swatches, all-day bars, and timed event stripes are
-    consistent.
-    """
     fills: dict[str, int] = {}
     idx = 0
     for _, (color, _) in events_by_cal.items():
@@ -110,7 +86,7 @@ def _build_fill_map(
     return fills
 
 
-# ── Layout ────────────────────────────────────────────────────────────────────
+# ── Layout (identical to renderer.py) ────────────────────────────────────────
 @dataclasses.dataclass
 class _Layout:
     width:           int
@@ -118,7 +94,7 @@ class _Layout:
     num_cols:        int
     col_w:           int
     allday_top:      int
-    allday_rows:     int   # actual number of all-day rows in use (1–MAX_ALLDAY_ROWS)
+    allday_rows:     int
     grid_top:        int
     px_per_hour:     float
     time_start_hour: int
@@ -139,7 +115,7 @@ class _Layout:
         col_w        = (width - TIME_AXIS_W) // num_cols
         allday_top   = BODY_TOP
         allday_strip = allday_rows * ALLDAY_ROW_H
-        grid_top     = allday_top + allday_strip + 1   # +1 for separator line
+        grid_top     = allday_top + allday_strip + 1
         grid_h       = height - grid_top
         return cls(
             width           = width,
@@ -156,135 +132,129 @@ class _Layout:
         )
 
 
-# ── Drawing helpers ───────────────────────────────────────────────────────────
+# ── Font helpers ──────────────────────────────────────────────────────────────
 
-def _draw_header(
-    draw: ImageDraw.ImageDraw,
+def _font_path(bold: bool = False) -> str | None:
+    candidates = [
+        f"/usr/share/fonts/truetype/dejavu/DejaVuSans{'-Bold' if bold else ''}.ttf",
+        f"/usr/share/fonts/dejavu/DejaVuSans{'-Bold' if bold else ''}.ttf",
+    ]
+    for p in candidates:
+        if Path(p).exists():
+            return p
+    return None
+
+
+def _font_src(bold: bool = False) -> str:
+    p = _font_path(bold=bold)
+    return f"url('{p}')" if p else f"local('DejaVu Sans{' Bold' if bold else ''}')"
+
+
+def _measure_text(text: str, size: int = 10, bold: bool = False) -> int:
+    """Pixel width of text using Pillow (matches renderer.py legend layout)."""
+    try:
+        from PIL import ImageDraw, ImageFont
+        from PIL import Image as _Image
+        p = _font_path(bold=bold)
+        font = ImageFont.truetype(p, size) if p else ImageFont.load_default()
+        _img  = _Image.new("L", (1, 1))
+        _draw = ImageDraw.Draw(_img)
+        return int(_draw.textlength(text, font=font))
+    except Exception:
+        return len(text) * 6
+
+
+# ── Template context builder ──────────────────────────────────────────────────
+
+def _build_context(
     layout: _Layout,
     days: list[date],
     today: date,
-    text_pass: bool = False,
-) -> None:
-    if not text_pass:
-        draw.rectangle([0, 0, layout.width, HEADER_H - 1], fill=BLACK)
-        for col, day in enumerate(days):
-            x0 = TIME_AXIS_W + col * layout.col_w
-            x1 = x0 + layout.col_w - 1
-            if day == today and layout.today_highlight:
-                draw.rectangle([x0, HEADER_H, x1, layout.height - 1], fill=LGREY)
-                draw.rectangle([x0, HEADER_H, x1, layout.height - 1], outline=MGREY, width=1)
-            if col > 0:
-                draw.line([x0, 0, x0, layout.height], fill=MGREY, width=1)
-    else:
-        for col, day in enumerate(days):
-            x0    = TIME_AXIS_W + col * layout.col_w
-            label = f"{DAY_NAMES[day.weekday()]} {day.day:02d}.{day.month:02d}."
-            tw    = draw.textlength(label, font=FONT_DAY)
-            draw.text((x0 + (layout.col_w - tw) / 2, 5), label, font=FONT_DAY, fill=WHITE)
-
-
-def _draw_legend(
-    draw: ImageDraw.ImageDraw,
-    layout: _Layout,
     events_by_cal: dict[str, tuple[str, list[CalEvent]]],
     fill_map: dict[str, int],
-    text_pass: bool = False,
-) -> None:
-    lx = TIME_AXIS_W + PADDING
-    if not text_pass:
-        draw.rectangle([0, HEADER_H, layout.width, HEADER_H + LEGEND_H - 1], fill=245)
-        draw.line([0, HEADER_H + LEGEND_H - 1, layout.width, HEADER_H + LEGEND_H - 1],
-                  fill=MGREY, width=1)
-        for cal_name, (color, _) in events_by_cal.items():
-            fill = fill_map.get(color, BLACK)
-            draw.rectangle([lx, HEADER_H + 3, lx + 10, HEADER_H + LEGEND_H - 4],
-                           fill=fill, outline=BLACK)
-            lx += 14
-            tw = int(draw.textlength(cal_name, font=FONT_LEGEND))
-            draw.rectangle([lx - 1, HEADER_H + 2, lx + tw + 2, HEADER_H + LEGEND_H - 3],
-                           fill=WHITE)
-            lx += tw + 14
-    else:
-        for cal_name, (color, _) in events_by_cal.items():
-            lx += 14
-            draw.text((lx, HEADER_H + 3), cal_name, font=FONT_LEGEND, fill=BLACK)
-            lx += int(draw.textlength(cal_name, font=FONT_LEGEND)) + 14
-
-
-def _draw_allday_strip(
-    draw: ImageDraw.ImageDraw,
-    layout: _Layout,
+    timed_events: dict[int, list[CalEvent]],
     allday_assignments: list[tuple[CalEvent, int, int, int]],
-    fill_map: dict[str, int],
-    text_pass: bool = False,
-) -> None:
+) -> dict:
+    W = layout.width
+    H = layout.height
+
+    # ── Column headers ───────────────────────────────────────────────────────
+    cols = []
+    for col, day in enumerate(days):
+        x0    = TIME_AXIS_W + col * layout.col_w
+        label = f"{DAY_NAMES[day.weekday()]} {day.day:02d}.{day.month:02d}."
+        cols.append({"index": col, "x0": x0, "label": label})
+
+    # ── Legend items ─────────────────────────────────────────────────────────
+    legend_items = []
+    lx = TIME_AXIS_W + PADDING
+    for cal_name, (color, _) in events_by_cal.items():
+        fill     = fill_map.get(color, BLACK)
+        fill_css = _grey_css(fill)
+        swatch_x = lx
+        lx      += 14
+        tw       = _measure_text(cal_name, size=10)
+        legend_items.append({
+            "name":            cal_name,
+            "fill_css":        fill_css,
+            "swatch_x":        swatch_x,
+            "text_backing_x":  lx - 1,
+            "text_backing_w":  tw + 3,
+            "text_x":          lx,
+        })
+        lx += tw + 14
+
+    # ── All-day events ───────────────────────────────────────────────────────
     strip_h = layout.allday_rows * ALLDAY_ROW_H
-    if not text_pass:
-        draw.line([TIME_AXIS_W - 1, layout.allday_top, TIME_AXIS_W - 1, layout.height],
-                  fill=MGREY, width=1)
-        draw.line([0, layout.allday_top + strip_h, layout.width, layout.allday_top + strip_h],
-                  fill=MGREY, width=1)
-        for ev, first_col, last_col, row in allday_assignments:
-            y0   = layout.allday_top + row * ALLDAY_ROW_H + 1
-            y1   = y0 + ALLDAY_ROW_H - 2
-            x0   = TIME_AXIS_W + first_col * layout.col_w + PADDING
-            x1   = TIME_AXIS_W + (last_col + 1) * layout.col_w - PADDING
-            fill = fill_map.get(ev.color, BLACK)
-            draw.rectangle([x0, y0, x1, y1], fill=WHITE, outline=BLACK)
-            draw.rectangle([x0, y0, x0 + 3, y1], fill=fill)
-    else:
-        for ev, first_col, last_col, row in allday_assignments:
-            y0  = layout.allday_top + row * ALLDAY_ROW_H + 1
-            x0  = TIME_AXIS_W + first_col * layout.col_w + PADDING
-            x1  = TIME_AXIS_W + (last_col + 1) * layout.col_w - PADDING
-            lbl = _truncate(ev.summary, x1 - x0 - 6, FONT_EVENT, draw)
-            draw.text((x0 + 6, y0 + 2), lbl, font=FONT_EVENT, fill=BLACK)
+    allday_ctx = []
+    for ev, first_col, last_col, row in allday_assignments:
+        y0       = layout.allday_top + row * ALLDAY_ROW_H + 1
+        x0       = TIME_AXIS_W + first_col * layout.col_w + PADDING
+        x1       = TIME_AXIS_W + (last_col + 1) * layout.col_w - PADDING
+        bar_w    = x1 - x0
+        fill_css = _grey_css(fill_map.get(ev.color, BLACK))
+        allday_ctx.append({
+            "x0":       x0,
+            "y0":       y0,
+            "width":    bar_w,
+            "height":   ALLDAY_ROW_H - 2,
+            "fill_css": fill_css,
+            "summary":  ev.summary,
+        })
 
-
-def _draw_time_axis(draw: ImageDraw.ImageDraw, layout: _Layout, text_pass: bool = False) -> None:
+    # ── Hour lines ───────────────────────────────────────────────────────────
+    hours = []
     for h in range(layout.time_start_hour, min(layout.time_end_hour + 1, 25)):
         y = layout.grid_top + int((h - layout.time_start_hour) * layout.px_per_hour)
-        if y >= layout.height:
+        if y >= H:
             break
-        if not text_pass:
-            draw.line([TIME_AXIS_W, y, layout.width, y], fill=MGREY, width=1)
-        else:
-            draw.text((1, y - 9), f"{h:02d}", font=FONT_TIME, fill=BLACK)
+        hours.append({"y": y, "label": f"{h:02d}"})
 
-
-def _draw_now_indicator(
-    draw: ImageDraw.ImageDraw,
-    layout: _Layout,
-    days: list[date],
-    today: date,
-) -> None:
+    # ── Now indicator ────────────────────────────────────────────────────────
+    now_indicator = None
     now      = datetime.now()
     now_frac = now.hour + now.minute / 60
-    if not (layout.time_start_hour <= now_frac < layout.time_end_hour):
-        return
-    try:
-        col = days.index(today)
-    except ValueError:
-        return
-    ny  = layout.grid_top + int((now_frac - layout.time_start_hour) * layout.px_per_hour)
-    tx0 = TIME_AXIS_W + col * layout.col_w
-    tx1 = tx0 + layout.col_w
-    # Dot sits on the time axis so it's never covered by an event block;
-    # line starts from the dot and runs across the today column.
-    draw.ellipse([TIME_AXIS_W - 5, ny - 3, TIME_AXIS_W + 1, ny + 3], fill=BLACK)
-    draw.line([tx0, ny, tx1, ny], fill=BLACK, width=2)
+    if layout.time_start_hour <= now_frac < layout.time_end_hour:
+        try:
+            col = days.index(today)
+            ny  = layout.grid_top + int((now_frac - layout.time_start_hour) * layout.px_per_hour)
+            tx0 = TIME_AXIS_W + col * layout.col_w
+            now_indicator = {
+                "dot_x":  TIME_AXIS_W - 5,
+                "dot_y":  ny - 3,
+                "line_x": tx0,
+                "line_y": ny - 1,
+            }
+        except ValueError:
+            pass
 
-
-def _draw_timed_events(
-    draw: ImageDraw.ImageDraw,
-    layout: _Layout,
-    day_events: dict[int, list[CalEvent]],
-    fill_map: dict[str, int],
-    text_pass: bool = False,
-) -> None:
-    for col, evs in day_events.items():
+    # ── Timed events ─────────────────────────────────────────────────────────
+    lang_attr  = _hyphenation_lang.replace("_", "-").lower()
+    timed_ctx  = []
+    for col, evs in timed_events.items():
         col_x0 = TIME_AXIS_W + col * layout.col_w + PADDING
         col_w  = layout.col_w - PADDING * 2
+
         for ev, lane, num_lanes in _assign_lanes(evs):
             lw         = col_w // num_lanes
             x0         = col_x0 + lane * lw
@@ -294,12 +264,83 @@ def _draw_timed_events(
             vis_end    = min(end_frac,   layout.time_end_hour)
             if vis_end <= vis_start:
                 continue
-            y0 = layout.grid_top + int((vis_start - layout.time_start_hour) * layout.px_per_hour)
-            y1 = layout.grid_top + int((vis_end   - layout.time_start_hour) * layout.px_per_hour) - 1
+            y0      = layout.grid_top + int((vis_start - layout.time_start_hour) * layout.px_per_hour)
+            y1      = layout.grid_top + int((vis_end   - layout.time_start_hour) * layout.px_per_hour) - 1
             if y1 - y0 < EVENT_MIN_H:
                 y1 = y0 + EVENT_MIN_H
-            _draw_timed_block(draw, ev, x0, y0, y1, lw, fill_map.get(ev.color, BLACK),
-                              text_pass=text_pass)
+            block_h = y1 - y0
+            if block_h < 12:
+                continue
+
+            short    = (ev.end - ev.start).total_seconds() <= 1800
+            fill_css = _grey_css(fill_map.get(ev.color, BLACK))
+            timed_ctx.append({
+                "x0":       x0,
+                "y0":       y0,
+                "width":    lw,
+                "height":   block_h,
+                "fill_css": fill_css,
+                "short":    short,
+                "summary":  ev.summary,
+                "time_str": ev.start.strftime("%H:%M"),
+            })
+
+    return {
+        # dimensions
+        "width":        W,
+        "height":       H,
+        "num_cols":     layout.num_cols,
+        "col_w":        layout.col_w,
+        "header_h":     HEADER_H,
+        "legend_h":     LEGEND_H,
+        "time_axis_w":  TIME_AXIS_W,
+        "allday_top":   layout.allday_top,
+        "allday_bottom": layout.allday_top + strip_h,
+        # colors
+        "mgrey_css":    _grey_css(MGREY),
+        "lgrey_css":    _grey_css(LGREY),
+        # fonts
+        "regular_font_src": _font_src(bold=False),
+        "bold_font_src":    _font_src(bold=True),
+        # dates
+        "today":          today,
+        "days":           days,
+        "today_highlight": layout.today_highlight,
+        # elements
+        "cols":           cols,
+        "legend_items":   legend_items,
+        "allday_events":  allday_ctx,
+        "hours":          hours,
+        "now_indicator":  now_indicator,
+        "timed_events":   timed_ctx,
+        "lang_attr":      lang_attr,
+    }
+
+
+# ── WeasyPrint → PIL ──────────────────────────────────────────────────────────
+
+def _weasy_to_pil(html: str, width: int, height: int) -> Image.Image:
+    import weasyprint
+
+    pdf_bytes = weasyprint.HTML(string=html, base_url=str(_TEMPLATE_DIR)).write_pdf()
+
+    with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as f:
+        f.write(pdf_bytes)
+        pdf_path = f.name
+
+    png_base = pdf_path[:-4]
+    png_path = png_base + ".png"
+    try:
+        subprocess.run(
+            ["pdftoppm", "-r", "96", "-png", "-singlefile", pdf_path, png_base],
+            check=True,
+            capture_output=True,
+        )
+        return Image.open(png_path).copy()
+    finally:
+        for p in (pdf_path, png_path):
+            if os.path.exists(p):
+                os.unlink(p)
 
 
 # ── Core renderer ─────────────────────────────────────────────────────────────
@@ -314,51 +355,25 @@ def render_days(
     today_highlight: bool = False,
 ) -> Image.Image:
     """
-    Render a calendar image for an arbitrary ordered list of dates.
+    Render a calendar image using WeasyPrint (HTML/CSS → PDF → PNG → 1-bit).
 
-    This is the single place where all drawing happens. View functions
-    (render_week, etc.) are thin wrappers that build the day list and delegate here.
-
-    Args:
-        days:               Ordered list of dates to display (one column each).
-        events_by_cal:      {cal_name: (hex_color, [CalEvent, ...])}
-        width, height:      Canvas dimensions in pixels.
-        time_window_hours:  How many hours the time grid spans.
-        time_start_hour:    First visible hour (0–23).
-        today_highlight:    Shade today's column.
+    Drop-in replacement for renderer.render_days with identical signature.
     """
-    fill_map            = _build_fill_map(events_by_cal)
+    fill_map                    = _build_fill_map(events_by_cal)
     timed_events, allday_events = _collect_day_events(days, events_by_cal)
-    allday_assignments  = _assign_allday_rows(allday_events, days)
-    used_rows           = max((r for _, _, _, r in allday_assignments), default=-1) + 1
-    allday_rows         = max(1, min(used_rows, MAX_ALLDAY_ROWS))
-    layout              = _Layout.build(len(days), width, height,
-                                        time_window_hours, time_start_hour, today_highlight,
-                                        allday_rows)
-    today               = date.today()
-
-    # Pass 1: graphics only (fills, lines, outlines) — will be dithered
-    img  = Image.new("L", (width, height), WHITE)
-    draw = ImageDraw.Draw(img)
-    _draw_header(draw, layout, days, today, text_pass=False)
-    _draw_legend(draw, layout, events_by_cal, fill_map, text_pass=False)
-    _draw_allday_strip(draw, layout, allday_assignments, fill_map, text_pass=False)
-    _draw_time_axis(draw, layout, text_pass=False)
-    _draw_now_indicator(draw, layout, days, today)
-    _draw_timed_events(draw, layout, timed_events, fill_map, text_pass=False)
-
-    # Dither graphics; text is drawn after so anti-aliased edges are never dithered
-    img  = img.convert("1", dither=Image.Dither.FLOYDSTEINBERG).convert("L")
-    draw = ImageDraw.Draw(img)
-
-    # Pass 2: text only — drawn on clean 1-bit result
-    _draw_header(draw, layout, days, today, text_pass=True)
-    _draw_legend(draw, layout, events_by_cal, fill_map, text_pass=True)
-    _draw_allday_strip(draw, layout, allday_assignments, fill_map, text_pass=True)
-    _draw_time_axis(draw, layout, text_pass=True)
-    _draw_timed_events(draw, layout, timed_events, fill_map, text_pass=True)
-
-    return img
+    allday_assignments          = _assign_allday_rows(allday_events, days)
+    used_rows                   = max((r for _, _, _, r in allday_assignments), default=-1) + 1
+    allday_rows                 = max(1, min(used_rows, MAX_ALLDAY_ROWS))
+    layout                      = _Layout.build(len(days), width, height,
+                                                time_window_hours, time_start_hour,
+                                                today_highlight, allday_rows)
+    today   = date.today()
+    ctx     = _build_context(layout, days, today, events_by_cal, fill_map,
+                             timed_events, allday_assignments)
+    tmpl    = _jinja_env.get_template("calendar_weasy.html")
+    html    = tmpl.render(**ctx)
+    img = _weasy_to_pil(html, width, height)
+    return img.convert("L")
 
 
 # ── Public view functions ─────────────────────────────────────────────────────
@@ -406,119 +421,3 @@ def render_3day(
     days = [start + timedelta(days=i) for i in range(3)]
     return render_days(days, events_by_cal, width, height,
                        time_window_hours, time_start_hour, today_highlight)
-
-
-# ── Event block renderer ──────────────────────────────────────────────────────
-
-_hyphenation_lang: str          = "de_DE"
-_hyphenator:       pyphen.Pyphen | None = None
-
-
-def set_hyphenation_lang(lang: str) -> None:
-    global _hyphenation_lang, _hyphenator
-    _hyphenation_lang = lang
-    _hyphenator = None   # force recreation on next use
-
-
-def _get_hyphenator() -> pyphen.Pyphen:
-    global _hyphenator
-    if _hyphenator is None:
-        _hyphenator = pyphen.Pyphen(lang=_hyphenation_lang)
-    return _hyphenator
-
-
-def _break_word(word: str, max_px: int, font: ImageFont.FreeTypeFont,
-                draw: ImageDraw.ImageDraw) -> tuple[str, str]:
-    """
-    Break a word that is too long to fit in max_px.
-    Returns (head_with_hyphen, tail). Falls back to a character-level split
-    if no hyphenation point is found.
-    """
-    hyph  = _get_hyphenator()
-    pairs = hyph.iterate(word)          # yields (left, right) pairs, longest first
-    for left, right in pairs:
-        candidate = left + "-"
-        if draw.textlength(candidate, font=font) <= max_px:
-            return candidate, right
-    # No hyphenation point fits — split character by character
-    for i in range(len(word) - 1, 0, -1):
-        candidate = word[:i] + "-"
-        if draw.textlength(candidate, font=font) <= max_px:
-            return candidate, word[i:]
-    return word, ""                     # word is too long even for one char
-
-
-def _wrap_text(text: str, max_px: int, font: ImageFont.FreeTypeFont,
-               draw: ImageDraw.ImageDraw) -> list[str]:
-    """Split text into lines that each fit within max_px, with hyphenation."""
-    words = text.split()
-    if not words:
-        return []
-    lines: list[str] = []
-    current = ""
-    for word in words:
-        candidate = (current + " " + word).lstrip() if current else word
-        if draw.textlength(candidate, font=font) <= max_px:
-            current = candidate
-        else:
-            # Word doesn't fit on the current line — try hyphenating
-            if current:
-                lines.append(current)
-                current = ""
-            # The word may still be too long even on its own line
-            while draw.textlength(word, font=font) > max_px:
-                head, word = _break_word(word, max_px, font, draw)
-                lines.append(head)
-            current = word
-    if current:
-        lines.append(current)
-    return lines
-
-
-def _draw_timed_block(draw: ImageDraw.ImageDraw, ev: CalEvent,
-                      x: int, y0: int, y1: int, w: int, fill: int,
-                      text_pass: bool = False) -> None:
-    """Draw a timed event block spanning y0→y1 with wrapped text."""
-    if not text_pass:
-        draw.rectangle([x, y0, x + w, y1], fill=WHITE, outline=fill)
-        draw.rectangle([x, y0, x + 3, y1], fill=fill)      # color bar on left
-        return
-
-    block_h = y1 - y0
-    if block_h < 12:
-        return
-
-    tx     = x + 5
-    tw     = w - 9      # usable text width (past bar + right padding)
-    ty     = y0 + 1
-    lh_sm  = 12         # FONT_TIME  (size 10) line height
-    lh_ev  = 13         # FONT_EVENT (size 10 bold) line height
-
-    short = (ev.end - ev.start).total_seconds() <= 1800  # ≤ 30 min: name only
-
-    if short:
-        draw.text((tx, ty), _truncate(ev.summary, tw, FONT_EVENT, draw),
-                  font=FONT_EVENT, fill=BLACK)
-        return
-
-    # Line 1: time
-    draw.text((tx, ty), ev.start.strftime("%H:%M"), font=FONT_TIME, fill=BLACK)
-    ty += lh_sm
-
-    # Remaining lines: word-wrapped summary
-    for line in _wrap_text(ev.summary, tw, FONT_EVENT, draw):
-        if ty + lh_ev > y1:                      # last pixel row — truncate
-            draw.text((tx, ty), _truncate(line, tw, FONT_EVENT, draw),
-                      font=FONT_EVENT, fill=BLACK)
-            break
-        draw.text((tx, ty), line, font=FONT_EVENT, fill=BLACK)
-        ty += lh_ev
-
-
-def _truncate(text: str, max_px: int, font: ImageFont.FreeTypeFont,
-              draw: ImageDraw.ImageDraw) -> str:
-    if draw.textlength(text, font=font) <= max_px:
-        return text
-    while text and draw.textlength(text + "…", font=font) > max_px:
-        text = text[:-1]
-    return text + "…" if text else ""
