@@ -6,6 +6,8 @@ Command-line entry point for rendering a calendar PNG from JSON event data.
 Usage:
     python cli.py <events.json> [--week YYYY-MM-DD] [--width 800] [--height 480]
                                 [--time-window 12] [--time-start 8] [-o output.png]
+
+Renderer: WeasyPrint (HTML/CSS → PDF → PNG)
 """
 
 from __future__ import annotations
@@ -15,6 +17,7 @@ from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from caldav_client import CalEvent
+from renderer import render_week
 
 
 def _load_events(path: str) -> dict[str, tuple[str, list[CalEvent]]]:
@@ -98,8 +101,6 @@ if __name__ == "__main__":
     parser.add_argument("--time-start",   type=int, default=8,
                         dest="time_start",
                         help="First visible hour 0-23 (default: 8)")
-    parser.add_argument("--renderer", choices=["pillow", "weasy"], default="pillow",
-                        help="Rendering backend: 'pillow' (default) or 'weasy' (WeasyPrint)")
     args = parser.parse_args()
 
     if args.week:
@@ -110,11 +111,6 @@ if __name__ == "__main__":
     else:
         today      = date.today()
         week_start = today - timedelta(days=today.weekday())
-
-    if args.renderer == "weasy":
-        from renderer_weasy import render_week
-    else:
-        from renderer import render_week
 
     try:
         events_by_cal = _load_events(args.events)

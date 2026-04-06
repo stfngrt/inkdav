@@ -8,7 +8,6 @@ dependencies = [
     "Pillow==10.4.0",
     "Flask==3.0.3",
     "requests==2.32.3",
-    "pyphen>=0.17.2",
     "weasyprint>=68.0",
 ]
 
@@ -16,12 +15,19 @@ dependencies = [
 dev = [
     "pytest>=8.0",
     "pytest-cov>=4.0",
+    "pytest-pylint>=0.21.0",
 ]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths  = ["tests"]
-addopts    = "--cov=. --cov-report=term-missing"
+addopts    = "--cov=. --cov-report=term-missing --pylint --pylint-error-types=CWER"
+
+[tool.pylint.messages_control]
+disable = [
+    "missing-function-docstring",  # test functions don't need docstrings
+    "redefined-outer-name",        # pytest fixture parameters intentionally shadow names
+]
 
 [tool.coverage.run]
 omit = ["tests/*"]

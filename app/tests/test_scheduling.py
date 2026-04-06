@@ -7,8 +7,6 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
-import pytest
-
 from caldav_client import CalEvent
 from scheduling import (
     MAX_ALLDAY_ROWS,
@@ -54,7 +52,7 @@ def _allday(start_offset: int, end_offset: int) -> CalEvent:
 # ── _assign_lanes ─────────────────────────────────────────────────────────────
 
 def test_assign_lanes_empty():
-    assert _assign_lanes([]) == []
+    assert not _assign_lanes([])
 
 
 def test_assign_lanes_single():
@@ -113,7 +111,7 @@ def test_assign_allday_rows_single():
     ev = _allday(0, 1)
     result = _assign_allday_rows([ev], days)
     assert len(result) == 1
-    _, first_col, last_col, row = result[0]
+    _, first_col, _, row = result[0]
     assert first_col == 0
     assert row == 0
 
@@ -177,28 +175,28 @@ def test_collect_timed_event_in_correct_column():
     ev = _timed(9, 10, day_offset=2)   # Wednesday = column 2
     timed, allday = _collect_day_events(days, _cal([ev]))
     assert ev in timed[2]
-    assert allday == []
+    assert not allday
 
 
 def test_collect_timed_event_outside_view_ignored():
     days = _days()
     ev = _timed(9, 10, day_offset=10)  # beyond the 7-day window
-    timed, allday = _collect_day_events(days, _cal([ev]))
+    timed, _ = _collect_day_events(days, _cal([ev]))
     assert all(len(v) == 0 for v in timed.values())
 
 
 def test_collect_allday_event_in_view_included():
     days = _days()
     ev = _allday(2, 5)
-    timed, allday = _collect_day_events(days, _cal([ev]))
+    _, allday = _collect_day_events(days, _cal([ev]))
     assert ev in allday
 
 
 def test_collect_allday_event_outside_view_excluded():
     days = _days()
     ev = _allday(8, 10)  # starts after the 7-day window
-    timed, allday = _collect_day_events(days, _cal([ev]))
-    assert allday == []
+    _, allday = _collect_day_events(days, _cal([ev]))
+    assert not allday
 
 
 def test_collect_multiple_calendars():
