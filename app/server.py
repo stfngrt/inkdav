@@ -119,6 +119,8 @@ def _render_to_bytes(days: list[date], calendars: list[dict]) -> bytes:
         time_window_hours=time_window,
         time_start_hour=time_start,
         today_highlight=bool(cfg.get("today_highlight", False)),
+        event_font_size=int(cfg.get("event_font_size", 10)),
+        event_bold=bool(cfg.get("event_bold", True)),
     )
     buf = io.BytesIO()
     img.save(buf, format="PNG", optimize=True)
@@ -311,6 +313,8 @@ def admin_settings():
         cfg["today_highlight"]    = "today_highlight" in request.form
         cfg["view_mode"]          = request.form["view_mode"]
         cfg["hyphenation_lang"]   = request.form["hyphenation_lang"]
+        cfg["event_font_size"]    = int(request.form["event_font_size"])
+        cfg["event_bold"]         = "event_bold" in request.form
         config.update(cfg)
     except Exception as e:
         return redirect(url_for("admin_index", error=str(e)))
