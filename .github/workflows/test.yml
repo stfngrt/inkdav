@@ -8,19 +8,12 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: app
 
     steps:
       - uses: actions/checkout@v4
 
-      - uses: astral-sh/setup-uv@v5
-        with:
-          enable-cache: true
-
-      - name: Install dependencies
-        run: uv sync --dev
+      - name: Build test image
+        run: docker build --target test -t inkdav-test ./app
 
       - name: Run tests
-        run: uv run pytest
+        run: docker run --rm inkdav-test
