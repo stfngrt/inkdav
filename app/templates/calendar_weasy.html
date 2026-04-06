@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+@font-face {
+  font-family: 'DejaVu Sans';
+  font-weight: normal;
+  src: {{ regular_font_src }};
+}
+@font-face {
+  font-family: 'DejaVu Sans';
+  font-weight: bold;
+  src: {{ bold_font_src }};
+}
+@page {
+  size: {{ width }}px {{ height }}px;
+  margin: 0;
+}
+body {
+  margin: 0; padding: 0;
+  width: {{ width }}px;
+  height: {{ height }}px;
+  background: white;
+  position: relative;
+  overflow: hidden;
+  font-family: 'DejaVu Sans', 'DejaVu Sans Bold', DejaVuSans, sans-serif;
+}
+* { box-sizing: border-box; }
+</style>
+</head>
+<body>
+
+{# ── Today highlight (drawn first — lowest z-order) ───────────────────────── #}
+{% if today_highlight %}
+  {% for col in range(num_cols) %}
+    {% if days[col] == today %}
+      {% set x0 = time_axis_w + col * col_w %}
+      <div style="position:absolute;left:{{ x0 }}px;top:{{ header_h }}px;
+                  width:{{ col_w }}px;height:{{ height - header_h }}px;
+                  background:{{ lgrey_css }};"></div>
+    {% endif %}
+  {% endfor %}
+{% endif %}
+
+{# ── Header: black bar ────────────────────────────────────────────────────── #}
+<div style="position:absolute;left:0;top:0;width:{{ width }}px;height:{{ header_h }}px;background:#000;"></div>
+
+{# ── Header: column labels + separators ──────────────────────────────────── #}
+{% for col in cols %}
+  <div style="position:absolute;left:{{ col.x0 }}px;top:5px;
+              width:{{ col_w }}px;text-align:center;
+              color:white;font-size:12px;font-weight:bold;line-height:1;">
+    {{ col.label }}
+  </div>
+  {% if col.index > 0 %}
+    <div style="position:absolute;left:{{ col.x0 }}px;top:0;
+                width:1px;height:{{ height }}px;background:{{ mgrey_css }};"></div>
+  {% endif %}
+{% endfor %}
+
+{# ── Legend: background strip ─────────────────────────────────────────────── #}
+<div style="position:absolute;left:0;top:{{ header_h }}px;
+            width:{{ width }}px;height:{{ legend_h }}px;background:#f5f5f5;"></div>
+<div style="position:absolute;left:0;top:{{ header_h + legend_h - 1 }}px;
+            width:{{ width }}px;height:1px;background:{{ mgrey_css }};"></div>
+
+{# ── Legend: swatches + names ─────────────────────────────────────────────── #}
+{% for cal in legend_items %}
+  <div style="position:absolute;left:{{ cal.swatch_x }}px;top:{{ header_h + 4 }}px;
+              width:10px;height:10px;background:{{ cal.fill_css }};border:1px solid #000;"></div>
+  <div style="position:absolute;left:{{ cal.text_backing_x }}px;top:{{ header_h + 2 }}px;
+              width:{{ cal.text_backing_w }}px;height:{{ legend_h - 4 }}px;background:white;"></div>
+  <div style="position:absolute;left:{{ cal.text_x }}px;top:{{ header_h + 3 }}px;
+              font-size:10px;color:#000;white-space:nowrap;">{{ cal.name }}</div>
+{% endfor %}
+
+{# ── All-day strip: vertical axis border ──────────────────────────────────── #}
+<div style="position:absolute;left:{{ time_axis_w - 1 }}px;top:{{ allday_top }}px;
+            width:1px;height:{{ height - allday_top }}px;background:{{ mgrey_css }};"></div>
+
+{# ── All-day strip: bottom separator ──────────────────────────────────────── #}
+<div style="position:absolute;left:0;top:{{ allday_bottom }}px;
+            width:{{ width }}px;height:1px;background:{{ mgrey_css }};"></div>
+
+{# ── All-day events ───────────────────────────────────────────────────────── #}
+{% for ev in allday_events %}
+  <div style="position:absolute;left:{{ ev.x0 }}px;top:{{ ev.y0 }}px;
+              width:{{ ev.width }}px;height:{{ ev.height }}px;
+              background:white;border:1px solid #000;overflow:hidden;">
+    <div style="position:absolute;left:0;top:0;width:3px;height:100%;background:{{ ev.fill_css }};"></div>
+    <span style="position:absolute;left:6px;top:2px;font-size:10px;font-weight:bold;
+                 white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+                 width:{{ ev.width - 10 }}px;">{{ ev.summary }}</span>
+  </div>
+{% endfor %}
+
+{# ── Time axis: hour lines + labels ───────────────────────────────────────── #}
+{% for hour in hours %}
+  <div style="position:absolute;left:{{ time_axis_w }}px;top:{{ hour.y }}px;
+              width:{{ width - time_axis_w }}px;height:1px;background:{{ mgrey_css }};"></div>
+  <div style="position:absolute;left:1px;top:{{ hour.y - 9 }}px;font-size:10px;color:#000;">
+    {{ hour.label }}
+  </div>
+{% endfor %}
+
+{# ── Now indicator ────────────────────────────────────────────────────────── #}
+{% if now_indicator %}
+  <div style="position:absolute;left:{{ now_indicator.dot_x }}px;top:{{ now_indicator.dot_y }}px;
+              width:6px;height:6px;border-radius:50%;background:#000;"></div>
+  <div style="position:absolute;left:{{ now_indicator.line_x }}px;top:{{ now_indicator.line_y }}px;
+              width:{{ col_w }}px;height:2px;background:#000;"></div>
+{% endif %}
+
+{# ── Timed events ─────────────────────────────────────────────────────────── #}
+{% for ev in timed_events %}
+  <div style="position:absolute;left:{{ ev.x0 }}px;top:{{ ev.y0 }}px;
+              width:{{ ev.width }}px;height:{{ ev.height }}px;
+              background:white;border:1px solid {{ ev.fill_css }};overflow:hidden;">
+    <div style="position:absolute;left:0;top:0;width:3px;height:100%;background:{{ ev.fill_css }};"></div>
+    <div style="position:absolute;left:5px;top:1px;right:2px;font-size:10px;overflow:hidden;">
+      {% if ev.short %}
+        <span style="display:block;font-weight:bold;white-space:nowrap;
+                     overflow:hidden;text-overflow:ellipsis;">{{ ev.summary }}</span>
+      {% else %}
+        <span style="display:block;font-size:10px;">{{ ev.time_str }}</span>
+        <span style="display:block;font-weight:bold;overflow-wrap:break-word;
+                     word-break:break-word;hyphens:auto;"
+              lang="{{ lang_attr }}">{{ ev.summary }}</span>
+      {% endif %}
+    </div>
+  </div>
+{% endfor %}
+
+</body>
+</html>
