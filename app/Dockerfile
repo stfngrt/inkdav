@@ -1,6 +1,6 @@
 FROM python:3.12-slim
 
-# Pillow needs these for font rendering
+# WeasyPrint needs Pango/Cairo for layout and font rendering
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libfreetype6 \
     fonts-dejavu-core \
@@ -9,7 +9,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libpangoft2-1.0-0 \
     libcairo2 \
     libglib2.0-0t64 \
-    poppler-utils \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
