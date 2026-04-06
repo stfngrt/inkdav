@@ -138,6 +138,8 @@ _DEFAULTS: dict = {
     "today_highlight":    False,
     "view_mode":          "week",
     "hyphenation_lang":   "de_DE",
+    "event_font_size":    10,
+    "event_bold":         True,
 }
 
 
@@ -162,6 +164,8 @@ def _from_env() -> dict:
         "today_highlight":   False,
         "view_mode":         "week",
         "hyphenation_lang":  "de_DE",
+        "event_font_size":   10,
+        "event_bold":        True,
     }
 
 

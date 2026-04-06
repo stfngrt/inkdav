@@ -174,6 +174,8 @@ def _build_context(
     fill_map: dict[str, int],
     timed_events: dict[int, list[CalEvent]],
     allday_assignments: list[tuple[CalEvent, int, int, int]],
+    event_font_size: int = 10,
+    event_bold: bool = True,
 ) -> dict:
     W = layout.width
     H = layout.height
@@ -312,8 +314,10 @@ def _build_context(
         "allday_events":  allday_ctx,
         "hours":          hours,
         "now_indicator":  now_indicator,
-        "timed_events":   timed_ctx,
-        "lang_attr":      lang_attr,
+        "timed_events":     timed_ctx,
+        "lang_attr":        lang_attr,
+        "event_font_size":  event_font_size,
+        "event_bold_css":   "bold" if event_bold else "normal",
     }
 
 
@@ -353,6 +357,8 @@ def render_days(
     time_window_hours: int = 12,
     time_start_hour: int = 8,
     today_highlight: bool = False,
+    event_font_size: int = 10,
+    event_bold: bool = True,
 ) -> Image.Image:
     """
     Render a calendar image using WeasyPrint (HTML/CSS → PDF → PNG → 1-bit).
@@ -369,7 +375,8 @@ def render_days(
                                                 today_highlight, allday_rows)
     today   = date.today()
     ctx     = _build_context(layout, days, today, events_by_cal, fill_map,
-                             timed_events, allday_assignments)
+                             timed_events, allday_assignments,
+                             event_font_size=event_font_size, event_bold=event_bold)
     tmpl    = _jinja_env.get_template("calendar_weasy.html")
     html    = tmpl.render(**ctx)
     img = _weasy_to_pil(html, width, height)

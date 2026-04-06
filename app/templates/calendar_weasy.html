@@ -89,7 +89,7 @@ body {
               width:{{ ev.width }}px;height:{{ ev.height }}px;
               background:white;border:1px solid #000;overflow:hidden;">
     <div style="position:absolute;left:0;top:0;width:3px;height:100%;background:{{ ev.fill_css }};"></div>
-    <span style="position:absolute;left:6px;top:2px;font-size:10px;font-weight:bold;
+    <span style="position:absolute;left:6px;top:2px;font-size:{{ event_font_size }}px;font-weight:{{ event_bold_css }};
                  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
                  width:{{ ev.width - 10 }}px;">{{ ev.summary }}</span>
   </div>
@@ -118,13 +118,13 @@ body {
               width:{{ ev.width }}px;height:{{ ev.height }}px;
               background:white;border:1px solid {{ ev.fill_css }};overflow:hidden;">
     <div style="position:absolute;left:0;top:0;width:3px;height:100%;background:{{ ev.fill_css }};"></div>
-    <div style="position:absolute;left:5px;top:1px;right:2px;font-size:10px;overflow:hidden;">
+    <div style="position:absolute;left:5px;top:1px;right:2px;font-size:{{ event_font_size }}px;overflow:hidden;">
       {% if ev.short %}
-        <span style="display:block;font-weight:bold;white-space:nowrap;
+        <span style="display:block;font-weight:{{ event_bold_css }};white-space:nowrap;
                      overflow:hidden;text-overflow:ellipsis;">{{ ev.summary }}</span>
       {% else %}
-        <span style="display:block;font-size:10px;">{{ ev.time_str }}</span>
-        <span style="display:block;font-weight:bold;overflow-wrap:break-word;
+        <span style="display:block;font-size:{{ event_font_size }}px;">{{ ev.time_str }}</span>
+        <span style="display:block;font-weight:{{ event_bold_css }};overflow-wrap:break-word;
                      word-break:break-word;hyphens:auto;"
               lang="{{ lang_attr }}">{{ ev.summary }}</span>
       {% endif %}

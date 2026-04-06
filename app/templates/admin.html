@@ -154,6 +154,20 @@
         Highlight today column
       </label>
     </div>
+    <div class="row" style="margin-top:12px">
+      <div>
+        <label for="event_font_size">Event text size (px)</label>
+        <input type="number" id="event_font_size" name="event_font_size"
+               value="{{ cfg.get('event_font_size', 10) }}" min="6" max="24" required>
+      </div>
+      <div style="display:flex;align-items:flex-end">
+        <label style="font-weight:600;font-size:0.85rem;margin:0">
+          <input type="checkbox" name="event_bold" value="1"
+                 {% if cfg.get('event_bold', True) %}checked{% endif %}>
+          Bold event text
+        </label>
+      </div>
+    </div>
     <div style="margin-top:12px">
       <button type="submit" class="btn-primary">Save settings</button>
     </div>
