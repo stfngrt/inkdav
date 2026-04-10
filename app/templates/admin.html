@@ -60,14 +60,17 @@
 <!-- ── Live preview ─────────────────────────────────────────────────── -->
 <section>
   <h2>Preview</h2>
-  <div class="preview">
-    <p style="font-size:0.82rem;color:#666;margin:0 0 8px">
-      Current week &mdash; served by the PNG server on port 8080.
-      <a href="/refresh" style="font-size:inherit" onclick="this.closest('form') || (event.preventDefault(), fetch('/refresh',{method:'POST'}).then(()=>location.reload()))">Refresh now</a>
-    </p>
-    <img src="/week.png?t={{ ts }}" alt="Current week">
+  <div style="display:flex;gap:16px;flex-wrap:wrap">
+    <div class="preview" style="flex:1;min-width:280px">
+      <p style="font-size:0.82rem;color:#666;margin:0 0 8px">Current window</p>
+      <img src="/week.png?t={{ ts }}" alt="Current week" style="width:100%">
+    </div>
+    <div class="preview" style="flex:1;min-width:280px">
+      <p style="font-size:0.82rem;color:#666;margin:0 0 8px">Next window</p>
+      <img src="/next.png?t={{ ts }}" alt="Next week" style="width:100%">
+    </div>
   </div>
-  <form method="post" action="/refresh" style="margin-top:10px">
+  <form method="post" action="/refresh" style="margin-top:12px">
     <button type="submit" class="btn-secondary">Trigger refresh</button>
   </form>
 </section>
