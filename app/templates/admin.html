@@ -65,7 +65,7 @@
       Current week &mdash; served by the PNG server on port 8080.
       <a href="/refresh" style="font-size:inherit" onclick="this.closest('form') || (event.preventDefault(), fetch('/refresh',{method:'POST'}).then(()=>location.reload()))">Refresh now</a>
     </p>
-    <img src="http://{{ host }}:8080/week.png?t={{ ts }}" alt="Current week">
+    <img src="/week.png?t={{ ts }}" alt="Current week">
   </div>
   <form method="post" action="/refresh" style="margin-top:10px">
     <button type="submit" class="btn-secondary">Trigger refresh</button>
