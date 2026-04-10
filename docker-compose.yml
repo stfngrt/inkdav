@@ -23,7 +23,7 @@ services:
   # ─── Calendar renderer sidecar ───────────────────────────────────────────
   # Fetches N CalDAV calendars, renders a week-grid PNG, serves it on :8080.
   # After each refresh it POSTs to any configured webhook URLs (e.g. BYOS).
-  # Admin UI: http://localhost:5000
+  # Admin + PNG: http://localhost:8080
   inkdav:
     build:
       context: ./app
@@ -31,8 +31,7 @@ services:
     container_name: inkdav
     restart: unless-stopped
     ports:
-      - "8080:8080"        # PNG server (BYOS / debugging)
-      - "5001:5000"        # Flask admin GUI
+      - "8080:8080"        # Admin + PNG server
     environment:
       TZ: Europe/Berlin
       RENDER_WIDTH: "800"

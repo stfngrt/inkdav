@@ -1,14 +1,13 @@
 """
 server.py
 =========
-Runs two servers in the same process:
+Single Flask server on port 8080:
 
-  Port 8080 – minimal HTTP server (BaseHTTPRequestHandler)
-               Serves /week.png, /next.png, /health, /
-
-  Port 5000 – Flask admin GUI
-               Manages calendars, settings, and webhook targets.
-               Accessible at http://localhost:5000
+  /            – admin GUI (calendars, settings, webhooks)
+  /week.png    – current week PNG
+  /next.png    – next week PNG
+  /health      – JSON health check
+  /debug       – debug page
 
 After each successful refresh, POSTs to every enabled webhook with:
   { "merge_variables": { "image_url", "next_image_url", "week", "refreshed_at" } }
@@ -21,21 +20,16 @@ import json
 import logging
 import threading
 import time
-from datetime import date, datetime, timedelta, timezone
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
-import mimetypes
 from pathlib import Path
 
 import requests as _requests
 
 import config
 from caldav_client import CalEvent, fetch_range
-from flask import Flask, redirect, render_template, request, url_for
-from jinja2 import Environment, FileSystemLoader
-
-_jinja = Environment(loader=FileSystemLoader(Path(__file__).parent / "templates"), autoescape=True)
+from flask import Flask, Response, redirect, render_template, request, url_for
 from renderer import render_days, set_hyphenation_lang
 
 logging.basicConfig(
@@ -203,89 +197,51 @@ def _scheduler() -> None:
         time.sleep(config.refresh_seconds())
 
 
-# ── Port-8080 HTTP handler ────────────────────────────────────────────────────
+# ── Flask app (port 8080) ─────────────────────────────────────────────────────
 
-class Handler(BaseHTTPRequestHandler):
-
-    def log_message(self, fmt, *args):  # silence default access log spam
-        pass
-
-    def do_GET(self):
-        path = self.path.split("?")[0]
-
-        if path == "/week.png":
-            self._serve_png(_png_current)
-        elif path == "/next.png":
-            self._serve_png(_png_next)
-        elif path == "/health":
-            self._serve_health()
-        elif path in ("/", "/debug"):
-            self._serve_debug()
-        elif path.startswith("/static/"):
-            self._serve_static(path[len("/static/"):])
-        else:
-            self.send_error(404, "Not found")
-
-    def _serve_png(self, data: bytes | None):
-        if data is None:
-            self.send_error(503, "Not ready yet – refresh in progress")
-            return
-        self.send_response(200)
-        self.send_header("Content-Type", "image/png")
-        self.send_header("Content-Length", str(len(data)))
-        self.send_header("Cache-Control", "no-cache")
-        self.end_headers()
-        self.wfile.write(data)
-
-    def _serve_health(self):
-        refresh_secs = config.refresh_seconds()
-        with _lock:
-            body = json.dumps({
-                "status":      "ok" if _last_error is None else "degraded",
-                "last_fetch":  _last_fetch,
-                "next_fetch":  _last_fetch + refresh_secs,
-                "error":       _last_error,
-                "png_ready":   _png_current is not None,
-            }).encode()
-        self.send_response(200)
-        self.send_header("Content-Type", "application/json")
-        self.end_headers()
-        self.wfile.write(body)
-
-    def _serve_static(self, filename: str):
-        static_dir = Path(__file__).parent / "static"
-        filepath = (static_dir / filename).resolve()
-        if not str(filepath).startswith(str(static_dir)):  # prevent path traversal
-            self.send_error(403, "Forbidden")
-            return
-        if not filepath.is_file():
-            self.send_error(404, "Not found")
-            return
-        mime, _ = mimetypes.guess_type(str(filepath))
-        data = filepath.read_bytes()
-        self.send_response(200)
-        self.send_header("Content-Type", mime or "application/octet-stream")
-        self.send_header("Content-Length", str(len(data)))
-        self.send_header("Cache-Control", "max-age=3600")
-        self.end_headers()
-        self.wfile.write(data)
-
-    def _serve_debug(self):
-        body = _jinja.get_template("debug.html").render(
-            this_week    = _monday_of(date.today()),
-            refresh_secs = config.refresh_seconds(),
-            ts           = int(time.time()),
-        ).encode()
-        self.send_response(200)
-        self.send_header("Content-Type", "text/html; charset=utf-8")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+admin = Flask(__name__, template_folder="templates", static_folder="static")
 
 
-# ── Flask admin app (port 5000) ───────────────────────────────────────────────
+@admin.get("/week.png")
+def serve_week_png():
+    with _lock:
+        data = _png_current
+    if data is None:
+        return Response("Not ready yet – refresh in progress", status=503)
+    return Response(data, mimetype="image/png",
+                    headers={"Cache-Control": "no-cache", "Content-Length": str(len(data))})
 
-admin = Flask(__name__, template_folder="templates")
+
+@admin.get("/next.png")
+def serve_next_png():
+    with _lock:
+        data = _png_next
+    if data is None:
+        return Response("Not ready yet – refresh in progress", status=503)
+    return Response(data, mimetype="image/png",
+                    headers={"Cache-Control": "no-cache", "Content-Length": str(len(data))})
+
+
+@admin.get("/health")
+def serve_health():
+    refresh_secs = config.refresh_seconds()
+    with _lock:
+        body = {
+            "status":    "ok" if _last_error is None else "degraded",
+            "last_fetch": _last_fetch,
+            "next_fetch": _last_fetch + refresh_secs,
+            "error":      _last_error,
+            "png_ready":  _png_current is not None,
+        }
+    return Response(json.dumps(body), mimetype="application/json")
+
+
+@admin.get("/debug")
+def serve_debug():
+    return render_template("debug.html",
+                           this_week=_monday_of(date.today()),
+                           refresh_secs=config.refresh_seconds(),
+                           ts=int(time.time()))
 
 
 @admin.get("/")
@@ -422,7 +378,7 @@ def main():
 
     cals = config.calendars()
     if not cals:
-        log.warning("No calendars configured. Open http://localhost:5000 to add calendars.")
+        log.warning("No calendars configured. Open http://localhost:8080 to add calendars.")
     else:
         log.info("Loaded %d calendar(s):", len(cals))
         for c in cals:
@@ -431,17 +387,11 @@ def main():
     # Background scheduler
     threading.Thread(target=_scheduler, daemon=True).start()
 
-    # Flask admin on port 5000
-    threading.Thread(
-        target=lambda: admin.run(host="0.0.0.0", port=5000, use_reloader=False),
-        daemon=True,
-    ).start()
-
     port = 8080
-    log.info("PNG server   : http://0.0.0.0:%d/week.png", port)
-    log.info("Admin GUI    : http://0.0.0.0:5000/")
+    log.info("Server       : http://0.0.0.0:%d/", port)
+    log.info("PNG          : http://0.0.0.0:%d/week.png", port)
 
-    HTTPServer(("0.0.0.0", port), Handler).serve_forever()
+    admin.run(host="0.0.0.0", port=port, use_reloader=False)
 
 
 if __name__ == "__main__":
