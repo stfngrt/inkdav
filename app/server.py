@@ -9,8 +9,8 @@ Single Flask server on port 8080:
   /health      – JSON health check
   /debug       – debug page
 
-After each successful refresh, POSTs to every enabled webhook with:
-  { "merge_variables": { "image_url", "next_image_url", "week", "refreshed_at" } }
+After each successful refresh, POSTs the current week image as raw BMP bytes
+(Content-Type: image/bmp) to every enabled webhook.
 """
 
 from __future__ import annotations
@@ -45,6 +45,7 @@ log = logging.getLogger(__name__)
 _lock            = threading.Lock()
 _png_current: bytes | None = None
 _png_next:    bytes | None = None
+_bmp_current: bytes | None = None
 _last_fetch:  float        = 0
 _last_error:  str | None   = None
 
@@ -74,7 +75,8 @@ def _time_start_for(window_start: date) -> int:
     return fixed
 
 
-def _render_to_bytes(days: list[date], calendars: list[dict]) -> bytes:
+def _render_image(days: list[date], calendars: list[dict]):
+    """Render calendar days and return a PIL Image (no serialization)."""
     cfg           = config.get()
     local_tz      = ZoneInfo(cfg["timezone"])
     width, height = int(cfg["render_width"]), int(cfg["render_height"])
@@ -105,7 +107,7 @@ def _render_to_bytes(days: list[date], calendars: list[dict]) -> bytes:
             events_by_cal[name] = (color, [])
 
     set_hyphenation_lang(cfg.get("hyphenation_lang", "de_DE"))
-    img = render_days(
+    return render_days(
         days,
         events_by_cal,
         width=width,
@@ -116,8 +118,17 @@ def _render_to_bytes(days: list[date], calendars: list[dict]) -> bytes:
         event_font_size=int(cfg.get("event_font_size", 10)),
         event_bold=bool(cfg.get("event_bold", True)),
     )
+
+
+def _to_png(img) -> bytes:
     buf = io.BytesIO()
     img.save(buf, format="PNG", optimize=True)
+    return buf.getvalue()
+
+
+def _to_bmp(img) -> bytes:
+    buf = io.BytesIO()
+    img.save(buf, format="BMP")
     return buf.getvalue()
 
 
@@ -137,7 +148,7 @@ def _window_days(view_mode: str, offset: int = 0) -> list[date]:
 
 
 def refresh() -> None:
-    global _png_current, _png_next, _last_fetch, _last_error
+    global _png_current, _png_next, _bmp_current, _last_fetch, _last_error
 
     calendars = config.calendars()
     view_mode = config.get().get("view_mode", "week")
@@ -147,11 +158,12 @@ def refresh() -> None:
     log.info("Refreshing calendars (view=%s, start=%s)…", view_mode, current_days[0].isoformat())
 
     try:
-        current = _render_to_bytes(current_days, calendars)
-        nxt     = _render_to_bytes(next_days,    calendars)
+        current_img = _render_image(current_days, calendars)
+        next_img    = _render_image(next_days,    calendars)
         with _lock:
-            _png_current = current
-            _png_next    = nxt
+            _png_current = _to_png(current_img)
+            _png_next    = _to_png(next_img)
+            _bmp_current = _to_bmp(current_img)
             _last_fetch  = time.time()
             _last_error  = None
         log.info("Refresh complete.")
@@ -163,16 +175,16 @@ def refresh() -> None:
 
 
 def _fire_webhooks() -> None:
-    """POST the current PNG image to every enabled webhook after a successful refresh."""
+    """POST the current image as BMP to every enabled webhook after a successful refresh."""
     hooks = config.webhooks()
     if not hooks:
         return
 
     with _lock:
-        png_bytes = _png_current
+        bmp_bytes = _bmp_current
 
-    if not png_bytes:
-        log.warning("No PNG available to push via webhooks")
+    if not bmp_bytes:
+        log.warning("No image available to push via webhooks")
         return
 
     for hook in hooks:
@@ -181,8 +193,8 @@ def _fire_webhooks() -> None:
         try:
             r = _requests.post(
                 hook["url"],
-                data=png_bytes,
-                headers={"Content-Type": "image/png"},
+                data=bmp_bytes,
+                headers={"Content-Type": "image/bmp"},
                 timeout=10,
             )
             r.raise_for_status()
