@@ -56,8 +56,16 @@ def _monday_of(d: date) -> date:
     return d - timedelta(days=d.weekday())
 
 
-def _time_start_for(window_start: date) -> int:
-    """Compute the first visible hour for a given window start date based on config."""
+def _time_start_for(
+    window_start: date,
+    events_by_cal: dict | None = None,
+) -> int:
+    """Compute the first visible hour for a given window start date based on config.
+
+    In auto mode the window is anchored so the current time sits ~1/3 from the
+    top, then shifted (within the constraint that the current time stays
+    visible) to maximise the number of timed events inside the window.
+    """
     cfg    = config.get()
     window = int(cfg["time_window_hours"])
     mode   = cfg["time_start_mode"]
@@ -68,9 +76,45 @@ def _time_start_for(window_start: date) -> int:
         local_tz = ZoneInfo(config.timezone())
         now      = datetime.now(tz=local_tz)
         frac     = now.hour + now.minute / 60
-        # Place current time ~1/3 from top of the window
-        raw = frac - window / 3
-        return max(0, min(int(raw), 24 - window))
+
+        # Anchor: keep current time ~1/3 from the top
+        anchor = frac - window / 3
+
+        if events_by_cal:
+            # Collect all timed (non-all-day) events as (start_frac, end_frac)
+            timed: list[tuple[float, float]] = []
+            for _color, evs in events_by_cal.values():
+                for ev in evs:
+                    if not ev.all_day:
+                        s = ev.start.hour + ev.start.minute / 60
+                        e = ev.end.hour + ev.end.minute / 60
+                        timed.append((s, e))
+
+            if timed:
+                # Valid range keeping current time visible anywhere in window
+                lo = max(0.0, frac - window)
+                hi = min(24.0 - window, frac)
+
+                # Candidate positions: anchor + event boundaries
+                candidates: list[float] = [anchor]
+                for s, e in timed:
+                    candidates.append(s)           # event start at window top
+                    candidates.append(e - window)  # event end at window bottom
+
+                # Clamp each candidate into [lo, hi]
+                candidates = [max(lo, min(hi, c)) for c in candidates]
+
+                def _count(t_start: float) -> int:
+                    t_end = t_start + window
+                    return sum(1 for s, e in timed if s < t_end and e > t_start)
+
+                best = max(
+                    candidates,
+                    key=lambda c: (_count(c), -abs(c - anchor)),
+                )
+                return max(0, min(int(best), 24 - window))
+
+        return max(0, min(int(anchor), 24 - window))
 
     return fixed
 
@@ -81,7 +125,6 @@ def _render_image(days: list[date], calendars: list[dict]):
     local_tz      = ZoneInfo(cfg["timezone"])
     width, height = int(cfg["render_width"]), int(cfg["render_height"])
     time_window   = int(cfg["time_window_hours"])
-    time_start    = _time_start_for(days[0])
     fetch_start   = days[0]
     fetch_end     = days[-1] + timedelta(days=1)
     events_by_cal: dict[str, tuple[str, list[CalEvent]]] = {}
@@ -105,6 +148,10 @@ def _render_image(days: list[date], calendars: list[dict]):
         except Exception as e:
             log.warning("  %-20s → FAILED: %s", name, e)
             events_by_cal[name] = (color, [])
+
+    # Compute time_start after fetching events so auto mode can optimise the
+    # window position to keep as many events on screen as possible.
+    time_start = _time_start_for(days[0], events_by_cal)
 
     set_hyphenation_lang(cfg.get("hyphenation_lang", "de_DE"))
     return render_days(
