@@ -175,7 +175,7 @@ def _to_png(img) -> bytes:
 
 def _to_bmp(img) -> bytes:
     buf = io.BytesIO()
-    img.convert("1").save(buf, format="BMP")
+    img.save(buf, format="BMP")
     return buf.getvalue()
 
 
