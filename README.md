@@ -2,7 +2,7 @@
 
 <img src="app/static/logo.png" alt="inkdav logo" width="120" align="left">
 
-A self-hosted week calendar for [TRMNL](https://usetrmnl.com) e-ink displays. Fetches events from CalDAV (Nextcloud, iCloud, Fastmail, …), renders them as a 1-bit PNG week grid, and pushes the image to your TRMNL device every 15 minutes.
+A self-hosted week calendar for [TRMNL](https://usetrmnl.com) e-ink displays. Fetches events from CalDAV (Nextcloud, iCloud, Fastmail, …), renders them as a 1-bit week grid, and pushes the image to your TRMNL device every 15 minutes.
 
 ![Preview](app/preview.png)
 
@@ -15,7 +15,7 @@ CalDAV calendars          Inkdav
   (Nextcloud, etc.)  ───►  fetches & renders
                            every 15 minutes
                                 │
-                         webhook POST (PNG)
+                         webhook POST (BMP)
                                 │
                            BYOS server        ◄── TRMNL device polls
                            (larapaper)
@@ -130,8 +130,8 @@ The following environment variables only apply on **first run** (before `config.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `RENDER_WIDTH` | `800` | PNG width in pixels |
-| `RENDER_HEIGHT` | `480` | PNG height in pixels |
+| `RENDER_WIDTH` | `800` | Image width in pixels |
+| `RENDER_HEIGHT` | `480` | Image height in pixels |
 | `REFRESH_SECONDS` | `900` | Seconds between CalDAV fetches |
 | `TZ` | `Europe/Berlin` | Initial timezone |
 
@@ -141,7 +141,7 @@ The following environment variables only apply on **first run** (before `config.
 
 | Symptom | Fix |
 |---------|-----|
-| No events shown in PNG | Check `/health` and `docker compose logs inkdav` |
+| No events shown | Check `/health` and `docker compose logs inkdav` |
 | `Webhook failed: Connection refused` | Webhook URL uses `localhost` — change to `http://trmnl-byos:8080/...` |
 | `Webhook failed: 400 Bad Request` | Plugin type in BYOS is not **Image Webhook** — recreate the plugin |
 | `Webhook failed: 404 Not Found` | Wrong UUID in the webhook URL — copy it from the BYOS plugin page |
@@ -163,8 +163,8 @@ inkdav/
     ├── Dockerfile
     ├── config.py          # persistent config (JSON + env bootstrap)
     ├── caldav_client.py   # CalDAV fetcher
-    ├── renderer.py        # Pillow-based PNG renderer
-    ├── server.py          # PNG server + Flask admin + webhook dispatch
+    ├── renderer.py        # WeasyPrint/Pillow renderer (returns PIL Image)
+    ├── server.py          # image server (PNG via HTTP, BMP via webhooks) + Flask admin
     └── templates/
         └── admin.html
 ```
