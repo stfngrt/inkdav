@@ -164,7 +164,7 @@ def _render_to_bytes(days: list[date], calendars: list[dict]) -> bytes:
         event_bold=bool(cfg.get("event_bold", True)),
     )
     buf = io.BytesIO()
-    img.save(buf, format="PNG", optimize=True)
+    img.save(buf, format="PNG")
     return buf.getvalue()
 
 
