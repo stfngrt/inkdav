@@ -210,3 +210,52 @@ def test_collect_multiple_calendars():
     timed, _ = _collect_day_events(days, events_by_cal)
     assert ev1 in timed[0]
     assert ev2 in timed[1]
+
+
+# ── multi-day timed events ────────────────────────────────────────────────────
+
+def _multiday(summary: str, start_day: int, start_hour: int,
+              end_day: int, end_hour: int) -> CalEvent:
+    s = MONDAY + timedelta(days=start_day)
+    e = MONDAY + timedelta(days=end_day)
+    return CalEvent(
+        summary=summary,
+        start=datetime(s.year, s.month, s.day, start_hour, 0, tzinfo=TZ),
+        end=datetime(e.year, e.month, e.day, end_hour, 0, tzinfo=TZ),
+        all_day=False, calendar="Cal", color="#000000",
+    )
+
+
+def test_multiday_overnight_in_both_columns():
+    """Mon 20:00 → Tue 10:00 must land in col 0 (Mon) and col 1 (Tue)."""
+    ev = _multiday("Overnight", 0, 20, 1, 10)
+    timed, _ = _collect_day_events(_days(), _cal([ev]))
+    assert any(e is ev for e in timed[0]), "missing from Mon"
+    assert any(e is ev for e in timed[1]), "missing from Tue"
+    assert not any(e is ev for e in timed[2]), "wrongly in Wed"
+
+
+def test_multiday_three_days_in_all_columns():
+    """Mon 22:00 → Wed 08:00 must land in Mon, Tue, and Wed columns."""
+    ev = _multiday("Conference", 0, 22, 2, 8)
+    timed, _ = _collect_day_events(_days(), _cal([ev]))
+    assert any(e is ev for e in timed[0]), "missing from Mon"
+    assert any(e is ev for e in timed[1]), "missing from Tue"
+    assert any(e is ev for e in timed[2]), "missing from Wed"
+    assert not any(e is ev for e in timed[3]), "wrongly in Thu"
+
+
+def test_multiday_single_day_not_duplicated():
+    """Normal single-day event (start and end same date) still in one column only."""
+    ev = _timed(9, 10, day_offset=0)
+    timed, _ = _collect_day_events(_days(), _cal([ev]))
+    assert len(timed[0]) == 1
+    assert all(len(timed[col]) == 0 for col in range(1, 7))
+
+
+def test_multiday_ending_at_midnight():
+    """Mon 20:00 → Tue 00:00: Tue column included (zero-height block, will be skipped in render)."""
+    ev = _multiday("Late night", 0, 20, 1, 0)
+    timed, _ = _collect_day_events(_days(), _cal([ev]))
+    # Must be in Mon; Tue at 00:00 renders as zero-height → skip, but no crash
+    assert any(e is ev for e in timed[0]), "missing from Mon"
