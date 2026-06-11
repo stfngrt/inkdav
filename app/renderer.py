@@ -248,14 +248,18 @@ def _build_context(
     lang_attr  = _hyphenation_lang.replace("_", "-").lower()
     timed_ctx  = []
     for col, evs in timed_events.items():
-        col_x0 = TIME_AXIS_W + col * layout.col_w + PADDING
-        col_w  = layout.col_w - PADDING * 2
+        col_day = days[col]
+        col_x0  = TIME_AXIS_W + col * layout.col_w + PADDING
+        col_w   = layout.col_w - PADDING * 2
 
         for ev, lane, num_lanes in _assign_lanes(evs):
-            lw         = col_w // num_lanes
-            x0         = col_x0 + lane * lw
-            start_frac = ev.start.hour + ev.start.minute / 60
-            end_frac   = ev.end.hour   + ev.end.minute   / 60
+            lw = col_w // num_lanes
+            x0 = col_x0 + lane * lw
+            # Clip multi-day events to this column's day boundary.
+            start_frac = (ev.start.hour + ev.start.minute / 60
+                          if ev.start.date() == col_day else 0.0)
+            end_frac   = (ev.end.hour   + ev.end.minute   / 60
+                          if ev.end.date()   == col_day else 24.0)
             vis_start  = max(start_frac, layout.time_start_hour)
             vis_end    = min(end_frac,   layout.time_end_hour)
             if vis_end <= vis_start:

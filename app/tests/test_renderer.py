@@ -17,6 +17,7 @@ from caldav_client import CalEvent
 from renderer import (
     render_3day, render_rolling, render_week,
 )
+from scheduling import _collect_day_events
 
 TZ         = ZoneInfo("Europe/Berlin")
 WEEK_START = date(2026, 4, 6)   # a Monday
@@ -183,3 +184,67 @@ def test_long_summary_in_block():
     img = render_week({"Cal": ("#000000", [ev])}, WEEK_START,
                       time_start_hour=8, time_window_hours=12)
     assert img.size == (800, 480)
+
+
+# ── multi-day timed events ────────────────────────────────────────────────────
+
+def _multiday_timed(
+    summary: str,
+    start_day_offset: int,
+    start_hour: int,
+    end_day_offset: int,
+    end_hour: int,
+) -> CalEvent:
+    s = WEEK_START + timedelta(days=start_day_offset)
+    e = WEEK_START + timedelta(days=end_day_offset)
+    return CalEvent(
+        summary=summary,
+        start=datetime(s.year, s.month, s.day, start_hour, 0, tzinfo=TZ),
+        end=datetime(e.year, e.month, e.day, end_hour, 0, tzinfo=TZ),
+        all_day=False, calendar="Test", color="#000000",
+    )
+
+
+def test_multiday_timed_collected_in_both_columns():
+    """Event Mon 20:00 → Tue 10:00 must land in both col 0 and col 1."""
+    ev   = _multiday_timed("Overnight", 0, 20, 1, 10)
+    days = [WEEK_START + timedelta(days=i) for i in range(7)]
+    timed, _ = _collect_day_events(days, {"Cal": ("#000000", [ev])})
+    assert any(e.summary == "Overnight" for e in timed[0]), "missing from Mon column"
+    assert any(e.summary == "Overnight" for e in timed[1]), "missing from Tue column"
+    assert not any(e.summary == "Overnight" for e in timed[2]), "wrongly in Wed column"
+
+
+def test_multiday_timed_three_days_collected():
+    """Event Mon 22:00 → Wed 08:00 must land in Mon, Tue, and Wed columns."""
+    ev   = _multiday_timed("Conference", 0, 22, 2, 8)
+    days = [WEEK_START + timedelta(days=i) for i in range(7)]
+    timed, _ = _collect_day_events(days, {"Cal": ("#000000", [ev])})
+    assert any(e.summary == "Conference" for e in timed[0]), "missing from Mon"
+    assert any(e.summary == "Conference" for e in timed[1]), "missing from Tue"
+    assert any(e.summary == "Conference" for e in timed[2]), "missing from Wed"
+    assert not any(e.summary == "Conference" for e in timed[3]), "wrongly in Thu"
+
+
+def test_multiday_timed_renders_without_crash():
+    ev  = _multiday_timed("Overnight", 0, 20, 1, 10)
+    img = render_week({"Cal": ("#000000", [ev])}, WEEK_START,
+                      time_start_hour=8, time_window_hours=16)
+    assert img.size == (800, 480)
+
+
+def test_multiday_timed_three_day_renders_without_crash():
+    ev  = _multiday_timed("Conference", 0, 22, 2, 8)
+    img = render_week({"Cal": ("#000000", [ev])}, WEEK_START,
+                      time_start_hour=8, time_window_hours=16)
+    assert img.size == (800, 480)
+
+
+def test_single_day_event_not_duplicated():
+    """Normal single-day event still lands in exactly one column."""
+    ev   = _event("Stand-up", 9, 10, day_offset=0)
+    days = [WEEK_START + timedelta(days=i) for i in range(7)]
+    timed, _ = _collect_day_events(days, {"Cal": ("#000000", [ev])})
+    assert len(timed[0]) == 1
+    for col in range(1, 7):
+        assert len(timed[col]) == 0

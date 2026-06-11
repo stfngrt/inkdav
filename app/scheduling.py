@@ -37,9 +37,12 @@ def _collect_day_events(
                 if ev.start.date() < view_end and ev.end.date() > view_start:
                     allday.append(ev)
             else:
-                col = day_index.get(ev.start.date())
-                if col is not None:
-                    timed[col].append(ev)
+                # Multi-day timed events span multiple columns; add to each.
+                ev_start_date = ev.start.date()
+                ev_end_date   = ev.end.date()
+                for day, col in day_index.items():
+                    if ev_start_date <= day <= ev_end_date:
+                        timed[col].append(ev)
 
     return timed, allday
 
