@@ -123,7 +123,7 @@ body {
         <span style="display:block;font-weight:{{ event_bold_css }};white-space:nowrap;
                      overflow:hidden;text-overflow:ellipsis;">{{ ev.summary }}</span>
       {% else %}
-        <span style="display:block;font-size:{{ event_font_size }}px;">{{ ev.time_str }}</span>
+        {% if ev.time_str %}<span style="display:block;font-size:{{ event_font_size }}px;">{{ ev.time_str }}</span>{% endif %}
         <span style="display:block;font-weight:{{ event_bold_css }};overflow-wrap:break-word;
                      word-break:break-word;hyphens:auto;"
               lang="{{ lang_attr }}">{{ ev.summary }}</span>
