@@ -281,7 +281,7 @@ def _build_context(
                 "fill_css": fill_css,
                 "short":    short,
                 "summary":  ev.summary,
-                "time_str": ev.start.strftime("%H:%M"),
+                "time_str": ev.start.strftime("%H:%M") if ev.start.date() == col_day else "",
             })
 
     return {
