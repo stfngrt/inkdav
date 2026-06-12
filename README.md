@@ -61,13 +61,13 @@ docker compose up -d
 | What | URL |
 |------|-----|
 | BYOS dashboard | http://localhost:4567 |
-| Inkdav admin UI | http://localhost:5001 |
+| Inkdav admin UI | http://localhost:8080 |
 | Rendered PNG (current week) | http://localhost:8080/week.png |
 | Health check | http://localhost:8080/health |
 
 ### 3. Add your calendars
 
-Open **http://localhost:5001** and add each calendar:
+Open **http://localhost:8080** and add each calendar:
 
 | Field | Example |
 |-------|---------|
@@ -84,14 +84,14 @@ curl -u "alice:APP-PASSWORD" \
   -H "Depth: 1" | grep -o 'href>[^<]*' | grep dav
 ```
 
-**Color guide** — hex colors are converted to greyscale for the 1-bit display:
+**Color guide** — calendars are assigned fill shades by order of addition, not by hex value. The hex color you pick only affects the legend swatch; the actual e-ink fill is positional:
 
-| Hex | Rendered as |
-|-----|-------------|
-| `#000000` | Solid black |
-| `#555555` | Dark grey |
-| `#999999` | Mid grey |
-| `#cccccc` | Light grey |
+| Calendar order | Rendered as |
+|---------------|-------------|
+| 1st | Solid black |
+| 2nd | Dark grey |
+| 3rd | Mid grey |
+| 4th | Light grey |
 
 ### 4. Create an Image Webhook plugin in BYOS
 
@@ -103,7 +103,7 @@ curl -u "alice:APP-PASSWORD" \
 
 ### 5. Connect Inkdav to BYOS
 
-Open **http://localhost:5001**, go to **Webhooks**, and add:
+Open **http://localhost:8080**, go to **Webhooks**, and add:
 
 | Field | Value |
 |-------|-------|
@@ -124,7 +124,7 @@ docker compose logs inkdav --tail=20
 
 ## Configuration
 
-Everything is managed through the admin UI at **http://localhost:5001** and stored in a Docker volume (`inkdav_data`). No need to edit `.env` after initial setup.
+Everything is managed through the admin UI at **http://localhost:8080** and stored in a Docker volume (`inkdav_data`). No need to edit `.env` after initial setup.
 
 The following environment variables only apply on **first run** (before `config.json` exists):
 
@@ -162,9 +162,12 @@ inkdav/
 └── app/
     ├── Dockerfile
     ├── config.py          # persistent config (JSON + env bootstrap)
-    ├── caldav_client.py   # CalDAV fetcher
-    ├── renderer.py        # Pillow-based PNG renderer
-    ├── server.py          # PNG server + Flask admin + webhook dispatch
+    ├── caldav_client.py   # CalDAV fetcher → CalEvent dataclasses
+    ├── scheduling.py      # pure layout: lane + row assignment for events
+    ├── renderer.py        # WeasyPrint renderer (HTML/CSS → PDF → 1-bit PNG)
+    ├── server.py          # Flask server + admin UI + webhook dispatch
     └── templates/
-        └── admin.html
+        ├── admin.html
+        ├── calendar_weasy.html
+        └── debug.html
 ```
