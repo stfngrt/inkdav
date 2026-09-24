@@ -21,6 +21,10 @@ python cli.py <events.json> [--week YYYY-MM-DD] [--width 800] [--height 480]
                             [--time-window 12] [--time-start 8] [-o output.png]
 ```
 
+## Releases
+
+Tag every change on `main` that should be deployed. Bump `version` in `app/pyproject.toml`, commit, then push an annotated `vX.Y.Z` tag with the same version. The homelab deployment pins a tag, so untagged commits never reach it. The rules for picking the version are in [README.md](README.md#releases).
+
 ## Architecture
 
 Single Python process in `app/`, two concurrent components:
