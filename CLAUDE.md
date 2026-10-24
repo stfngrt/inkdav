@@ -69,4 +69,4 @@ Config stored in `/app/data/config.json` (Docker volume `inkdav_data`). Key fiel
 
 ## Tests
 
-Tests in `app/tests/`: `test_renderer.py` (color helpers, render output shape), `test_scheduling.py` (lane/row assignment), `test_cli.py` (CLI parsing). Run from `app/` with `uv run pytest`.
+Tests in `app/tests/`: `test_renderer.py` (color helpers, render output shape), `test_scheduling.py` (lane/row assignment), `test_cli.py` (CLI parsing), `test_caldav_client.py` (CalDAV auth). Run from `app/` with `uv run pytest`.

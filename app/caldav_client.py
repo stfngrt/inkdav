@@ -11,6 +11,7 @@ from zoneinfo import ZoneInfo
 
 import caldav
 from icalendar import Calendar
+from requests.auth import HTTPBasicAuth
 
 
 @dataclass
@@ -37,7 +38,14 @@ def fetch_range(
     Fetch all events in [start, end) from one CalDAV calendar.
     Returns a list of CalEvent, sorted by start time.
     """
-    client   = caldav.DAVClient(url=url, username=user, password=password)
+    # Without an auth object, DAVClient sends each new client's first request
+    # without credentials and picks an auth scheme from the 401 it gets back.
+    # A client is built per calendar per refresh, so that doubled every REPORT.
+    # Sending Basic up front avoids the extra round trip. If the server rejects
+    # Basic and offers Digest, DAVClient still switches to Digest on that 401.
+    # The password is encoded as UTF-8, as DAVClient does when it picks Basic.
+    auth = HTTPBasicAuth(user, password.encode("utf-8")) if user and password else None
+    client   = caldav.DAVClient(url=url, username=user, password=password, auth=auth)
     calendar = client.calendar(url=url)
 
     # expand=True asks the server to expand recurring events in the range
