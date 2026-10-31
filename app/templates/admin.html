@@ -31,6 +31,7 @@
     .btn-secondary:hover { background: #d1d5db; }
     .cal-card { border: 1px solid #ddd; border-radius: 5px; padding: 12px; margin-bottom: 12px; background: #fafafa; }
     .cal-card h3 { margin: 0 0 10px; font-size: 0.95rem; display: flex; align-items: center; gap: 8px; }
+    .cal-warn { margin: 0 0 10px; padding: 6px 8px; font-size: 0.82rem; color: #92400e; background: #fef3c7; border: 1px solid #fcd34d; border-radius: 4px; word-break: break-word; }
     .swatch { display: inline-block; width: 14px; height: 14px; border-radius: 3px; border: 1px solid #999; vertical-align: middle; }
     .cal-actions { display: flex; gap: 8px; margin-top: 10px; }
     .flash-ok  { background: #dcfce7; border: 1px solid #86efac; color: #166534; padding: 10px 14px; border-radius: 5px; margin-bottom: 16px; }
@@ -187,6 +188,14 @@
       <span class="swatch" style="background:{{ cal.color }}"></span>
       {{ cal.name }}
     </h3>
+    {% set st = cal_status.get(cal.url) %}
+    {% if st and st.error %}
+    <p class="cal-warn">
+      &#x26A0; Last fetch failed: {{ st.error }}<br>
+      {% if st.last_ok_str %}Showing data from {{ st.last_ok_str }}.
+      {% else %}No data fetched yet, so the display is not being updated.{% endif %}
+    </p>
+    {% endif %}
     <details>
       <summary>Edit</summary>
       <form method="post" action="/calendar/{{ loop.index0 }}/edit">
@@ -209,7 +218,8 @@
           </div>
           <div>
             <label>Password / App password</label>
-            <input type="password" name="password" value="{{ cal.password }}" required>
+            <input type="password" name="password" autocomplete="new-password"
+                   placeholder="Leave blank to keep current">
           </div>
         </div>
         <div class="cal-actions">
@@ -266,9 +276,8 @@
 <section>
   <h2>Webhooks</h2>
   <p style="font-size:0.82rem;color:#666;margin:0 0 12px">
-    After each successful refresh, a POST is sent to every enabled webhook with:
-    <code>merge_variables.image_url</code>, <code>next_image_url</code>,
-    <code>week</code>, <code>refreshed_at</code>.
+    After each successful refresh, the current PNG is POSTed to every enabled webhook
+    as the raw request body (<code>Content-Type: image/png</code>).
   </p>
 
   {% for hook in cfg.webhooks %}
@@ -296,12 +305,6 @@
         </div>
         <label>Webhook URL</label>
         <input type="url" name="url" value="{{ hook.url }}" required>
-        <label>Image base URL
-          <span style="font-weight:400;color:#666">(how BYOS reaches this container)</span>
-        </label>
-        <input type="text" name="image_base_url"
-               value="{{ hook.image_base_url or 'http://calendar:8080' }}"
-               placeholder="http://calendar:8080">
         <div class="cal-actions">
           <button type="submit" class="btn-primary">Save</button>
         </div>
@@ -335,12 +338,7 @@
       </div>
       <label>Webhook URL</label>
       <input type="url" name="url"
-             placeholder="http://byos:8080/webhooks/{token}" required>
-      <label>Image base URL
-        <span style="font-weight:400;color:#666">(how BYOS reaches this container)</span>
-      </label>
-      <input type="text" name="image_base_url"
-             value="http://calendar:8080" placeholder="http://calendar:8080">
+             placeholder="http://trmnl-byos:8080/api/plugin_settings/&lt;uuid&gt;/image" required>
       <div style="margin-top:12px">
         <button type="submit" class="btn-primary">Add webhook</button>
       </div>

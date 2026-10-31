@@ -6,11 +6,12 @@ Single Flask server on port 8080:
   /            – admin GUI (calendars, settings, webhooks)
   /week.png    – current week PNG
   /next.png    – next week PNG
-  /health      – JSON health check
+  /health      – JSON health check, including per-calendar fetch status
   /debug       – debug page
 
-After each successful refresh, POSTs to every enabled webhook with:
-  { "merge_variables": { "image_url", "next_image_url", "week", "refreshed_at" } }
+After each successful refresh, POSTs the current-window PNG to every enabled
+webhook as the raw request body (Content-Type: image/png). The push is skipped
+while a calendar has failed and has no earlier data to fall back on.
 """
 
 from __future__ import annotations
@@ -20,10 +21,9 @@ import json
 import logging
 import threading
 import time
+from dataclasses import replace
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
-
-from pathlib import Path
 
 import requests as _requests
 
@@ -48,18 +48,60 @@ _png_next:    bytes | None = None
 _last_fetch:  float        = 0
 _last_error:  str | None   = None
 
+# Per-calendar fetch state, keyed by calendar URL.
+#   _last_good   – events from the last successful fetch, reused when a fetch fails
+#   _cal_status  – {"last_ok": float | None, "error": str | None} for /health and the admin UI
+_last_good:  dict[str, list[CalEvent]] = {}
+_cal_status: dict[str, dict]           = {}
+
 
 # ── Fetch + render ────────────────────────────────────────────────────────────
+
+def _local_today() -> date:
+    """Today's date in the configured timezone (not the container's TZ)."""
+    return datetime.now(tz=ZoneInfo(config.timezone())).date()
+
 
 def _monday_of(d: date) -> date:
     return d - timedelta(days=d.weekday())
 
 
+def _timed_spans(
+    days: list[date],
+    events_by_cal: dict[str, tuple[str, list[CalEvent]]],
+) -> list[tuple[float, float]]:
+    """Return (start_hour, end_hour) spans of timed events, clipped per visible day.
+
+    A multi-day event contributes one span per day it touches, so an event
+    from 22:00 to 02:00 counts as 22–24 on the first day and 0–2 on the next.
+    """
+    spans: list[tuple[float, float]] = []
+    for _color, evs in events_by_cal.values():
+        for ev in evs:
+            if ev.all_day:
+                continue
+            tz = ev.start.tzinfo
+            for d in days:
+                day_start = datetime(d.year, d.month, d.day, tzinfo=tz)
+                day_end   = day_start + timedelta(days=1)
+                s = max(ev.start, day_start)
+                e = min(ev.end, day_end)
+                if e <= s:
+                    continue
+                spans.append((
+                    (s - day_start).total_seconds() / 3600,
+                    (e - day_start).total_seconds() / 3600,
+                ))
+    return spans
+
+
 def _time_start_for(
-    window_start: date,
+    days: list[date],
     events_by_cal: dict | None = None,
+    today: date | None = None,
+    now: datetime | None = None,
 ) -> int:
-    """Compute the first visible hour for a given window start date based on config.
+    """Compute the first visible hour for the given days based on config.
 
     In auto mode the window is anchored so the current time sits ~1/3 from the
     top, then shifted (within the constraint that the current time stays
@@ -70,66 +112,65 @@ def _time_start_for(
     mode   = cfg["time_start_mode"]
     fixed  = int(cfg["time_start_hour"])
 
-    today = date.today()
-    if mode == "auto" and window_start <= today <= window_start + timedelta(days=6):
-        local_tz = ZoneInfo(config.timezone())
-        now      = datetime.now(tz=local_tz)
-        frac     = now.hour + now.minute / 60
+    if now is None:
+        now = datetime.now(tz=ZoneInfo(config.timezone()))
+    if today is None:
+        today = now.date()
+
+    if mode == "auto" and today in days:
+        frac = now.hour + now.minute / 60
 
         # Anchor: keep current time ~1/3 from the top
         anchor = frac - window / 3
 
-        if events_by_cal:
-            # Collect all timed (non-all-day) events as (start_frac, end_frac)
-            timed: list[tuple[float, float]] = []
-            for _color, evs in events_by_cal.values():
-                for ev in evs:
-                    if not ev.all_day:
-                        s = ev.start.hour + ev.start.minute / 60
-                        e = ev.end.hour + ev.end.minute / 60
-                        timed.append((s, e))
+        timed = _timed_spans(days, events_by_cal) if events_by_cal else []
+        if timed:
+            # Valid range keeping current time visible anywhere in window
+            lo = max(0.0, frac - window)
+            hi = min(24.0 - window, frac)
 
-            if timed:
-                # Valid range keeping current time visible anywhere in window
-                lo = max(0.0, frac - window)
-                hi = min(24.0 - window, frac)
+            # Candidate positions: anchor + event boundaries
+            candidates: list[float] = [anchor]
+            for s, e in timed:
+                candidates.append(s)           # event start at window top
+                candidates.append(e - window)  # event end at window bottom
 
-                # Candidate positions: anchor + event boundaries
-                candidates: list[float] = [anchor]
-                for s, e in timed:
-                    candidates.append(s)           # event start at window top
-                    candidates.append(e - window)  # event end at window bottom
+            # Clamp each candidate into [lo, hi]
+            candidates = [max(lo, min(hi, c)) for c in candidates]
 
-                # Clamp each candidate into [lo, hi]
-                candidates = [max(lo, min(hi, c)) for c in candidates]
+            def _count(t_start: float) -> int:
+                t_end = t_start + window
+                return sum(1 for s, e in timed if s < t_end and e > t_start)
 
-                def _count(t_start: float) -> int:
-                    t_end = t_start + window
-                    return sum(1 for s, e in timed if s < t_end and e > t_start)
-
-                best = max(
-                    candidates,
-                    key=lambda c: (_count(c), -abs(c - anchor)),
-                )
-                return max(0, min(int(best), 24 - window))
+            best = max(
+                candidates,
+                key=lambda c: (_count(c), -abs(c - anchor)),
+            )
+            return max(0, min(int(best), 24 - window))
 
         return max(0, min(int(anchor), 24 - window))
 
     return fixed
 
 
-def _render_to_bytes(days: list[date], calendars: list[dict]) -> bytes:
-    cfg           = config.get()
-    local_tz      = ZoneInfo(cfg["timezone"])
-    width, height = int(cfg["render_width"]), int(cfg["render_height"])
-    time_window   = int(cfg["time_window_hours"])
-    fetch_start   = days[0]
-    fetch_end     = days[-1] + timedelta(days=1)
+def _fetch_all(
+    calendars: list[dict],
+    start: date,
+    end: date,
+) -> tuple[dict[str, tuple[str, list[CalEvent]]], list[str]]:
+    """Fetch [start, end) from every calendar.
+
+    When a calendar fails, its events from the last successful fetch are used
+    instead, so a short CalDAV outage does not blank the display.
+
+    Returns (events_by_cal, names of failed calendars that had no earlier data).
+    """
+    local_tz = ZoneInfo(config.timezone())
     events_by_cal: dict[str, tuple[str, list[CalEvent]]] = {}
+    missing: list[str] = []
 
     for cal in calendars:
-        name  = cal["name"]
-        color = cal["color"]
+        name, color, key = cal["name"], cal["color"], cal["url"]
         try:
             evs = fetch_range(
                 url      = cal["url"],
@@ -137,19 +178,53 @@ def _render_to_bytes(days: list[date], calendars: list[dict]) -> bytes:
                 password = cal["password"],
                 cal_name = name,
                 color    = color,
-                start    = fetch_start,
-                end      = fetch_end,
+                start    = start,
+                end      = end,
                 local_tz = local_tz,
             )
-            events_by_cal[name] = (color, evs)
+            with _lock:
+                _last_good[key]  = evs
+                _cal_status[key] = {"last_ok": time.time(), "error": None}
             log.info("  %-20s → %d events", name, len(evs))
         except Exception as e:
-            log.warning("  %-20s → FAILED: %s", name, e)
-            events_by_cal[name] = (color, [])
+            with _lock:
+                cached = _last_good.get(key)
+                prev   = _cal_status.get(key, {})
+                _cal_status[key] = {"last_ok": prev.get("last_ok"), "error": str(e)}
+            if cached is None:
+                log.warning("  %-20s → FAILED, no earlier data: %s", name, e)
+                missing.append(name)
+                evs = []
+            else:
+                log.warning("  %-20s → FAILED, using last good data: %s", name, e)
+                evs = cached
+        # The cached events may have been fetched with an older name/color.
+        events_by_cal[name] = (color, [replace(ev, calendar=name, color=color) for ev in evs])
 
-    # Compute time_start after fetching events so auto mode can optimise the
-    # window position to keep as many events on screen as possible.
-    time_start = _time_start_for(days[0], events_by_cal)
+    # Forget calendars that were removed from the config.
+    keys = {c["url"] for c in calendars}
+    with _lock:
+        for key in list(_last_good):
+            if key not in keys:
+                del _last_good[key]
+        for key in list(_cal_status):
+            if key not in keys:
+                del _cal_status[key]
+
+    return events_by_cal, missing
+
+
+def _render_to_bytes(
+    days: list[date],
+    events_by_cal: dict[str, tuple[str, list[CalEvent]]],
+    today: date,
+) -> bytes:
+    cfg           = config.get()
+    width, height = int(cfg["render_width"]), int(cfg["render_height"])
+    time_window   = int(cfg["time_window_hours"])
+
+    # Only this window's events take part in picking the auto time window.
+    time_start = _time_start_for(days, events_by_cal, today=today)
 
     set_hyphenation_lang(cfg.get("hyphenation_lang", "de_DE"))
     img = render_days(
@@ -162,15 +237,17 @@ def _render_to_bytes(days: list[date], calendars: list[dict]) -> bytes:
         today_highlight=bool(cfg.get("today_highlight", False)),
         event_font_size=int(cfg.get("event_font_size", 10)),
         event_bold=bool(cfg.get("event_bold", True)),
+        today=today,
     )
     buf = io.BytesIO()
     img.save(buf, format="PNG")
     return buf.getvalue()
 
 
-def _window_days(view_mode: str, offset: int = 0) -> list[date]:
+def _window_days(view_mode: str, offset: int = 0, today: date | None = None) -> list[date]:
     """Return the list of days to render for the given view mode and offset window."""
-    today = date.today()
+    if today is None:
+        today = _local_today()
     if view_mode == "rolling":
         start = today + timedelta(days=7 * offset)
         return [start + timedelta(days=i) for i in range(7)]
@@ -186,23 +263,33 @@ def _window_days(view_mode: str, offset: int = 0) -> list[date]:
 def refresh() -> None:
     global _png_current, _png_next, _last_fetch, _last_error
 
-    calendars = config.calendars()
-    view_mode = config.get().get("view_mode", "week")
-    current_days = _window_days(view_mode, offset=0)
-    next_days    = _window_days(view_mode, offset=1)
+    calendars    = config.calendars()
+    view_mode    = config.get().get("view_mode", "week")
+    today        = _local_today()
+    current_days = _window_days(view_mode, offset=0, today=today)
+    next_days    = _window_days(view_mode, offset=1, today=today)
 
     log.info("Refreshing calendars (view=%s, start=%s)…", view_mode, current_days[0].isoformat())
 
     try:
-        current = _render_to_bytes(current_days, calendars)
-        nxt     = _render_to_bytes(next_days,    calendars)
+        # One fetch covers both windows; the renderer picks out each window's days.
+        events_by_cal, missing = _fetch_all(
+            calendars, current_days[0], next_days[-1] + timedelta(days=1),
+        )
+        current = _render_to_bytes(current_days, events_by_cal, today)
+        nxt     = _render_to_bytes(next_days,    events_by_cal, today)
         with _lock:
             _png_current = current
             _png_next    = nxt
             _last_fetch  = time.time()
             _last_error  = None
         log.info("Refresh complete.")
-        _fire_webhooks()
+        if missing:
+            # Pushing now would send an image with those calendars blank.
+            # Leave the device on its last image until they can be fetched.
+            log.warning("Skipping webhooks: no data for %s", ", ".join(missing))
+        else:
+            _fire_webhooks()
     except Exception as e:
         log.error("Refresh failed: %s", e)
         with _lock:
@@ -272,13 +359,23 @@ def serve_next_png():
 @admin.get("/health")
 def serve_health():
     refresh_secs = config.refresh_seconds()
+    cals = config.calendars()
     with _lock:
+        cal_body = {
+            c["name"]: {
+                "last_ok": _cal_status.get(c["url"], {}).get("last_ok"),
+                "error":   _cal_status.get(c["url"], {}).get("error"),
+            }
+            for c in cals
+        }
+        healthy = _last_error is None and all(v["error"] is None for v in cal_body.values())
         body = {
-            "status":    "ok" if _last_error is None else "degraded",
+            "status":    "ok" if healthy else "degraded",
             "last_fetch": _last_fetch,
             "next_fetch": _last_fetch + refresh_secs,
             "error":      _last_error,
             "png_ready":  _png_current is not None,
+            "calendars":  cal_body,
         }
     return Response(json.dumps(body), mimetype="application/json")
 
@@ -286,7 +383,7 @@ def serve_health():
 @admin.get("/debug")
 def serve_debug():
     return render_template("debug.html",
-                           this_week=_monday_of(date.today()),
+                           this_week=_monday_of(_local_today()),
                            refresh_secs=config.refresh_seconds(),
                            ts=int(time.time()))
 
@@ -297,9 +394,18 @@ def admin_index():
     saved  = request.args.get("saved") == "1"
     error  = request.args.get("error", "")
     host   = request.host.split(":")[0]
+    tz     = ZoneInfo(cfg["timezone"])
+    with _lock:
+        status = {k: dict(v) for k, v in _cal_status.items()}
+    for v in status.values():
+        v["last_ok_str"] = (
+            datetime.fromtimestamp(v["last_ok"], tz).strftime("%Y-%m-%d %H:%M")
+            if v["last_ok"] else None
+        )
     return render_template("admin.html",
                            cfg=cfg, saved=saved, error=error,
-                           host=host, ts=int(time.time()))
+                           host=host, ts=int(time.time()),
+                           cal_status=status)
 
 
 @admin.post("/settings")
@@ -345,11 +451,13 @@ def calendar_add():
 def calendar_edit(idx: int):
     try:
         cfg = config.get()
+        # The edit form never contains the stored password; blank keeps it.
+        password = request.form.get("password", "") or cfg["calendars"][idx]["password"]
         cfg["calendars"][idx] = {
             "name":     request.form["name"].strip(),
             "url":      request.form["url"].strip(),
             "user":     request.form["user"].strip(),
-            "password": request.form["password"],
+            "password": password,
             "color":    request.form["color"],
         }
         config.update(cfg)
@@ -376,7 +484,6 @@ def webhook_add():
         cfg["webhooks"].append({
             "name":           request.form["name"].strip(),
             "url":            request.form["url"].strip(),
-            "image_base_url": request.form["image_base_url"].strip(),
             "enabled":        "enabled" in request.form,
         })
         config.update(cfg)
@@ -392,7 +499,6 @@ def webhook_edit(idx: int):
         cfg["webhooks"][idx] = {
             "name":           request.form["name"].strip(),
             "url":            request.form["url"].strip(),
-            "image_base_url": request.form["image_base_url"].strip(),
             "enabled":        "enabled" in request.form,
         }
         config.update(cfg)

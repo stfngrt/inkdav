@@ -12,12 +12,7 @@ Schema (config.json):
     {"url": "...", "user": "...", "password": "...", "name": "...", "color": "#rrggbb"}
   ],
   "webhooks": [
-    {
-      "name": "BYOS",
-      "url": "http://byos:8080/webhooks/{token}",
-      "image_base_url": "http://calendar:8080",
-      "enabled": true
-    }
+    {"name": "BYOS", "url": "http://trmnl-byos:8080/api/plugin_settings/<uuid>/image", "enabled": true}
   ],
   "refresh_seconds": 900,
   "timezone": "Europe/Berlin",
@@ -28,15 +23,8 @@ Schema (config.json):
   "time_start_hour": 8
 }
 
-Webhook payload (POSTed after each successful refresh):
-{
-  "merge_variables": {
-    "image_url":      "http://calendar:8080/week.png",
-    "next_image_url": "http://calendar:8080/next.png",
-    "week":           "Apr 7 – Apr 13, 2026",
-    "refreshed_at":   "2026-04-04T10:30:00"
-  }
-}
+After each successful refresh, the current-window PNG is POSTed to every
+enabled webhook as the raw request body (Content-Type: image/png).
 """
 
 from __future__ import annotations
@@ -148,6 +136,9 @@ def _migrate(cfg: dict) -> dict:
     for k, v in _DEFAULTS.items():
         if k not in cfg:
             cfg[k] = v
+    # image_base_url was stored for a JSON payload that was never sent.
+    for h in cfg.get("webhooks", []):
+        h.pop("image_base_url", None)
     return cfg
 
 def _from_env() -> dict:

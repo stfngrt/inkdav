@@ -142,6 +142,7 @@ The following environment variables only apply on **first run** (before `config.
 | Symptom | Fix |
 |---------|-----|
 | No events shown in PNG | Check `/health` and `docker compose logs inkdav` |
+| ⚠ next to a calendar in the admin UI | Its last fetch failed. The display keeps that calendar's last good events; `/health` lists the error under `calendars`. A calendar that has never fetched successfully holds back webhook pushes, so the device keeps its previous image |
 | `Webhook failed: Connection refused` | Webhook URL uses `localhost` — change to `http://trmnl-byos:8080/...` |
 | `Webhook failed: 400 Bad Request` | Plugin type in BYOS is not **Image Webhook** — recreate the plugin |
 | `Webhook failed: 404 Not Found` | Wrong UUID in the webhook URL — copy it from the BYOS plugin page |

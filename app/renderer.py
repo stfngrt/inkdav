@@ -339,11 +339,13 @@ def render_days(
     today_highlight: bool = False,
     event_font_size: int = 10,
     event_bold: bool = False,
+    today: date | None = None,
 ) -> Image.Image:
     """
     Render a calendar image using WeasyPrint (HTML/CSS → PDF → PNG → 1-bit).
 
-    Drop-in replacement for renderer.render_days with identical signature.
+    `today` marks the current day; pass it in the display's timezone.
+    Defaults to the host's local date.
     """
     fill_map                    = _build_fill_map(events_by_cal)
     timed_events, allday_events = _collect_day_events(days, events_by_cal)
@@ -353,7 +355,8 @@ def render_days(
     layout                      = _Layout.build(len(days), width, height,
                                                 time_window_hours, time_start_hour,
                                                 today_highlight, allday_rows)
-    today   = date.today()
+    if today is None:
+        today = date.today()
     ctx     = _build_context(layout, days, today, events_by_cal, fill_map,
                              timed_events, allday_assignments,
                              event_font_size=event_font_size, event_bold=event_bold)
