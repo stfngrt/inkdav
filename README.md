@@ -159,8 +159,9 @@ The following environment variables only apply on **first run** (before `config.
 Every change that reaches `main` and should be deployed gets a semver tag. Deployments pin a tag, not the branch, so an untagged commit does not reach them.
 
 1. Bump `version` in `app/pyproject.toml`. A change that breaks existing config or the webhook payload bumps the major, a new feature bumps the minor, and a fix bumps the patch.
-2. Commit the bump on `main`.
-3. Tag that commit with the same version, prefixed with `v`, and push the tag:
+2. Add a section for the new version at the top of [CHANGELOG.md](CHANGELOG.md).
+3. Commit the bump and the changelog on `main`.
+4. Tag that commit with the same version, prefixed with `v`, and push the tag:
 
 ```bash
 git tag -a v0.2.0 -m "v0.2.0"
